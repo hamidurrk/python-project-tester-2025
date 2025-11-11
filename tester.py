@@ -1,5 +1,6 @@
 import json
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -10,7 +11,7 @@ from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
 BASE_DIR = Path(__file__).resolve().parent
-SUBMISSIONS_DIR = BASE_DIR / "submissions"
+DATA_DIR = BASE_DIR / "data"
 PREDEFINED_INPUTS_PATH = BASE_DIR / "predefined_inputs.json"
 CONFIG_PATH = BASE_DIR / "config.json"
 
@@ -26,7 +27,7 @@ class PythonTesterApp:
 		self.file_var = tk.StringVar()
 		self.predefined_inputs: list[str] = []
 		self.zoom_level = 1.0
-		self.submissions_dir = SUBMISSIONS_DIR
+		self.submissions_dir: Path | None = None
 
 		self._load_config()
 		self._create_menu()
@@ -43,15 +44,15 @@ class PythonTesterApp:
 		self.menubar = tk.Menu(self.root)
 		self.root.config(menu=self.menubar)
 
-		# File menu
 		self.file_menu = tk.Menu(self.menubar, tearoff=0)
 		self.menubar.add_cascade(label="File", menu=self.file_menu)
 		self.file_menu.add_command(label="Import Predefined Inputs", command=self._import_predefined_inputs)
 		self.file_menu.add_command(label="Export Predefined Inputs", command=self._export_predefined_inputs)
 		self.file_menu.add_separator()
+		self.file_menu.add_command(label="Settings", command=self._open_settings)
+		self.file_menu.add_separator()
 		self.file_menu.add_command(label="Exit", command=self._on_close)
 
-		# View menu
 		self.view_menu = tk.Menu(self.menubar, tearoff=0)
 		self.menubar.add_cascade(label="View", menu=self.view_menu)
 		self.view_menu.add_command(label="Zoom In", command=self._zoom_in, accelerator="Ctrl++")
@@ -86,7 +87,10 @@ class PythonTesterApp:
 		refresh_button.grid(row=0, column=1, padx=(0, 6))
 
 		browse_button = ttk.Button(file_row, text="Browse", command=self._browse_directory)
-		browse_button.grid(row=0, column=2)
+		browse_button.grid(row=0, column=2, padx=(0, 6))
+
+		reset_files_button = ttk.Button(file_row, text="Reset Files", command=self._reset_files)
+		reset_files_button.grid(row=0, column=3)
 
 		controls = ttk.Frame(main_frame)
 		controls.grid(row=2, column=0, sticky="ew", pady=(0, 8))
@@ -152,8 +156,11 @@ class PythonTesterApp:
 		self.predefined_listbox.bind("<Return>", lambda e: self._send_selected_predefined())
 		self.predefined_listbox.bind("<space>", lambda e: self._handle_space_key())
 		self.predefined_listbox.bind("<Control-e>", lambda e: self._edit_selected_predefined())
+		self.predefined_listbox.bind("<Button-3>", self._show_context_menu)
 		
-		# Variable to track inline editing
+		self.context_menu = tk.Menu(self.predefined_listbox, tearoff=0)
+		self.context_menu.add_command(label="Insert row below", command=self._insert_row_below)
+		
 		self.edit_entry = None
 		self.edit_index = None
 
@@ -183,12 +190,23 @@ class PythonTesterApp:
 		add_button.grid(row=0, column=1)
 
 	def _refresh_file_list(self) -> None:
+		if self.submissions_dir is None:
+			# No directory selected
+			self.file_combo["values"] = []
+			if self.file_var.get():
+				self.file_var.set("")
+			return
+		
 		if not self.submissions_dir.exists():
-			try:
-				self.submissions_dir.mkdir(parents=True, exist_ok=True)
-			except OSError as err:
-				messagebox.showerror("Directory Error", f"Could not create directory: {err}")
-				return
+			# Directory was deleted or is inaccessible
+			messagebox.showwarning("Directory Missing", 
+				f"The directory {self.submissions_dir} no longer exists.\nPlease browse for a new directory.")
+			self.submissions_dir = None
+			self._save_config()
+			self.file_combo["values"] = []
+			if self.file_var.get():
+				self.file_var.set("")
+			return
 
 		try:
 			python_files = sorted(self.submissions_dir.glob("*.py"))
@@ -199,31 +217,42 @@ class PythonTesterApp:
 
 		self.file_combo["values"] = file_names
 
-		if file_names and (not self.file_var.get() or self.file_var.get() not in file_names):
-			self.file_var.set(file_names[0])
-		elif not file_names:
+		if file_names:
+			if hasattr(self, 'last_opened_file') and self.last_opened_file in file_names:
+				self.file_var.set(self.last_opened_file)
+			elif not self.file_var.get() or self.file_var.get() not in file_names:
+				self.file_var.set(file_names[0])
+		else:
 			self.file_var.set("")
 
 	def _browse_directory(self) -> None:
-		initial_dir = self.submissions_dir if self.submissions_dir.exists() else BASE_DIR
-		selected_dir = filedialog.askdirectory(
-			title="Select Submissions Directory",
-			initialdir=str(initial_dir)
+		initial_dir = BASE_DIR
+		if self.submissions_dir is not None and self.submissions_dir.exists():
+			initial_dir = self.submissions_dir
+		
+		selected_file = filedialog.askopenfilename(
+			title="Select Python File",
+			initialdir=str(initial_dir),
+			filetypes=[("Python files", "*.py"), ("All files", "*.*")]
 		)
 		
-		if selected_dir:
-			new_dir = Path(selected_dir)
-			if new_dir.exists():
-				self.submissions_dir = new_dir
+		if selected_file:
+			file_path = Path(selected_file)
+			if file_path.exists() and file_path.suffix == ".py":
+				self.submissions_dir = file_path.parent
+				self.last_opened_file = file_path.name
 				self._save_config()
 				self._refresh_file_list()
-				messagebox.showinfo("Directory Changed", f"Submissions directory set to:\n{new_dir}")
 			else:
-				messagebox.showerror("Directory Error", "The selected directory does not exist.")
+				messagebox.showerror("File Error", "Please select a valid Python file.")
 
 	def _run_selected_file(self) -> None:
 		if self.process and self.process.poll() is None:
 			messagebox.showinfo("Process Running", "A process is already running. Stop it before starting a new one.")
+			return
+
+		if self.submissions_dir is None:
+			messagebox.showwarning("No Directory", "Please browse and select a Python file first.")
 			return
 
 		selected_file = self.file_var.get()
@@ -231,9 +260,14 @@ class PythonTesterApp:
 			messagebox.showwarning("No File Selected", "Please choose a submission file to run.")
 			return
 
+		self.last_opened_file = selected_file
+		self._save_config()
+
 		script_path = self.submissions_dir / selected_file
 		if not script_path.exists():
-			messagebox.showerror("File Missing", f"Could not find {selected_file} in submissions directory.")
+			messagebox.showerror("File Missing", 
+				f"Could not find {selected_file} in the current directory.\nDirectory may have changed. Please refresh or browse again.")
+			self._refresh_file_list()
 			return
 
 		try:
@@ -304,9 +338,8 @@ class PythonTesterApp:
 
 	def _send_manual_input(self) -> None:
 		value = self.manual_input_var.get()
-		if value:
-			self._send_to_process(value)
-			self.manual_input_var.set("")
+		self._send_to_process(value)
+		self.manual_input_var.set("")
 
 	def _send_selected_predefined(self) -> None:
 		selection = self.predefined_listbox.curselection()
@@ -333,7 +366,6 @@ class PythonTesterApp:
 		if not selection:
 			return
 		
-		# If already editing, finish that edit first
 		if self.edit_entry:
 			self._finish_edit()
 			return
@@ -341,7 +373,6 @@ class PythonTesterApp:
 		index = selection[0]
 		self.edit_index = index
 		
-		# Get the position and size of the selected item
 		bbox = self.predefined_listbox.bbox(index)
 		if not bbox:
 			return
@@ -369,17 +400,13 @@ class PythonTesterApp:
 		
 		new_value = self.edit_entry.get()
 		
-		# Update the predefined inputs list
-		if new_value.strip():  # Only save if not empty
-			self.predefined_inputs[self.edit_index] = new_value
-			self._save_predefined_inputs()
-			self._reload_predefined_listbox()
-			
-			# Reselect the edited item
-			self.predefined_listbox.selection_set(self.edit_index)
-			self.predefined_listbox.see(self.edit_index)
+		self.predefined_inputs[self.edit_index] = new_value
+		self._save_predefined_inputs()
+		self._reload_predefined_listbox()
 		
-		# Clean up
+		self.predefined_listbox.selection_set(self.edit_index)
+		self.predefined_listbox.see(self.edit_index)
+		
 		self.edit_entry.destroy()
 		self.edit_entry = None
 		self.edit_index = None
@@ -389,7 +416,6 @@ class PythonTesterApp:
 		if not self.edit_entry:
 			return
 		
-		# Clean up
 		self.edit_entry.destroy()
 		self.edit_entry = None
 		self.edit_index = None
@@ -414,14 +440,14 @@ class PythonTesterApp:
 		self._append_output(f"> {text}\n")
 
 	def _add_new_predefined(self) -> None:
-		new_value = self.new_input_var.get().strip()
-		if not new_value:
-			return
-
+		new_value = self.new_input_var.get()
 		self.predefined_inputs.append(new_value)
 		self._save_predefined_inputs()
 		self._reload_predefined_listbox()
 		self.new_input_var.set("")
+		
+		last_index = len(self.predefined_inputs) - 1
+		self.predefined_listbox.see(last_index)
 
 	def _remove_selected_predefined(self) -> None:
 		selection = self.predefined_listbox.curselection()
@@ -476,6 +502,32 @@ class PythonTesterApp:
 		
 		self.predefined_listbox.selection_set(index + 1)
 		self.predefined_listbox.see(index + 1)
+
+	def _show_context_menu(self, event: tk.Event) -> None:
+		index = self.predefined_listbox.nearest(event.y)
+		if index >= 0:
+			self.predefined_listbox.selection_clear(0, tk.END)
+			self.predefined_listbox.selection_set(index)
+			try:
+				self.context_menu.tk_popup(event.x_root, event.y_root)
+			finally:
+				self.context_menu.grab_release()
+
+	def _insert_row_below(self) -> None:
+		selection = self.predefined_listbox.curselection()
+		if not selection:
+			return
+		
+		index = selection[0]
+		self.predefined_inputs.insert(index + 1, "")
+		self._save_predefined_inputs()
+		self._reload_predefined_listbox()
+		
+		self.predefined_listbox.selection_clear(0, tk.END)
+		self.predefined_listbox.selection_set(index + 1)
+		self.predefined_listbox.see(index + 1)
+		
+		self._edit_selected_predefined()
 
 	def _load_predefined_inputs(self) -> None:
 		if PREDEFINED_INPUTS_PATH.exists():
@@ -539,6 +591,117 @@ class PythonTesterApp:
 		except Exception as e:
 			messagebox.showerror("Export Error", f"Failed to export file: {e}")
 
+	def _open_settings(self) -> None:
+		settings_window = tk.Toplevel(self.root)
+		settings_window.title("Settings")
+		settings_window.geometry("500x400")
+		settings_window.transient(self.root)
+		settings_window.grab_set()
+		
+		general_frame = ttk.LabelFrame(settings_window, text="General", padding=10)
+		general_frame.pack(fill="both", expand=True, padx=10, pady=10)
+		
+		label = ttk.Label(general_frame, text="Stored Data Files (.txt):")
+		label.pack(anchor="w", pady=(0, 5))
+		
+		list_frame = ttk.Frame(general_frame)
+		list_frame.pack(fill="both", expand=True, pady=(0, 10))
+		
+		scrollbar = ttk.Scrollbar(list_frame)
+		scrollbar.pack(side="right", fill="y")
+		
+		data_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set)
+		data_listbox.pack(side="left", fill="both", expand=True)
+		scrollbar.config(command=data_listbox.yview)
+		
+		def refresh_data_files():
+			data_listbox.delete(0, tk.END)
+			if DATA_DIR.exists():
+				for file in sorted(DATA_DIR.glob("*.txt")):
+					data_listbox.insert(tk.END, file.name)
+		
+		refresh_data_files()
+		
+		buttons_frame = ttk.Frame(general_frame)
+		buttons_frame.pack(fill="x")
+		
+		def add_data_file():
+			file_path = filedialog.askopenfilename(
+				title="Select Data File",
+				filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+			)
+			if file_path:
+				try:
+					source = Path(file_path)
+					dest = DATA_DIR / source.name
+					shutil.copy(source, dest)
+					refresh_data_files()
+					# messagebox.showinfo("Success", f"Added {source.name} to data files.")
+				except Exception as e:
+					messagebox.showerror("Error", f"Failed to add file: {e}")
+		
+		def remove_data_file():
+			selection = data_listbox.curselection()
+			if not selection:
+				messagebox.showwarning("No Selection", "Please select a file to remove.")
+				return
+			
+			filename = data_listbox.get(selection[0])
+			file_path = DATA_DIR / filename
+			
+			if messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete {filename}?"):
+				try:
+					file_path.unlink()
+					refresh_data_files()
+					# messagebox.showinfo("Success", f"Removed {filename} from data files.")
+				except Exception as e:
+					messagebox.showerror("Error", f"Failed to remove file: {e}")
+		
+		add_button = ttk.Button(buttons_frame, text="Add File", command=add_data_file)
+		add_button.pack(side="left", padx=(0, 5))
+		
+		remove_button = ttk.Button(buttons_frame, text="Remove File", command=remove_data_file)
+		remove_button.pack(side="left")
+		
+		close_button = ttk.Button(settings_window, text="Close", command=settings_window.destroy)
+		close_button.pack(pady=10)
+	
+	def _reset_files(self) -> None:
+		if not DATA_DIR.exists() or not list(DATA_DIR.glob("*.txt")):
+			messagebox.showwarning("No Data Files", "No stored data files found. Please add files in Settings.")
+			return
+		
+		if self.submissions_dir is None:
+			messagebox.showwarning("No Directory", "Please browse and select a directory first.")
+			return
+		
+		if not self.submissions_dir.exists():
+			messagebox.showerror("Error", 
+				f"The directory {self.submissions_dir} no longer exists.\nPlease browse for a new directory.")
+			self.submissions_dir = None
+			self._save_config()
+			return
+		
+		message = "This will delete matching files in the current directory and copy stored data files. Continue?"
+		if not messagebox.askyesno("Confirm Reset", message):
+			return
+		
+		try:
+			for data_file in DATA_DIR.glob("*.txt"):
+				target_file = self.submissions_dir / data_file.name
+				if target_file.exists():
+					target_file.unlink()
+			
+			copied_count = 0
+			for data_file in DATA_DIR.glob("*.txt"):
+				dest = self.submissions_dir / data_file.name
+				shutil.copy(data_file, dest)
+				copied_count += 1
+			
+			messagebox.showinfo("Success", f"Reset complete. Copied {copied_count} file(s) to:\n{self.submissions_dir}")
+		except Exception as e:
+			messagebox.showerror("Error", f"Failed to reset files: {e}")
+
 	def _save_predefined_inputs(self) -> None:
 		PREDEFINED_INPUTS_PATH.write_text(json.dumps(self.predefined_inputs, indent=2), encoding="utf-8")
 
@@ -569,9 +732,7 @@ class PythonTesterApp:
 		self.root.destroy()
 
 	def _setup_zoom_bindings(self) -> None:
-		# Bind Ctrl+MouseWheel for zoom
 		self.root.bind("<Control-MouseWheel>", self._handle_mouse_zoom)
-		# Bind Ctrl+Plus and Ctrl+Minus for zoom
 		self.root.bind("<Control-plus>", lambda e: self._zoom_in())
 		self.root.bind("<Control-equal>", lambda e: self._zoom_in())  # Ctrl+= (same key as +)
 		self.root.bind("<Control-minus>", lambda e: self._zoom_out())
@@ -616,13 +777,11 @@ class PythonTesterApp:
 		listbox_font = ("TkDefaultFont", new_font_size)
 		self.predefined_listbox.configure(font=listbox_font)
 		
-		# Update control buttons (tk.Button) font
 		button_font = ("TkDefaultFont", new_font_size)
 		self.run_button.configure(font=button_font)
 		self.stop_button.configure(font=button_font)
 		self.clear_button.configure(font=button_font)
 		
-		# Update menu bar font - use a specific font tuple
 		menu_font = ("Segoe UI", new_font_size)
 		try:
 			self.menubar.config(font=menu_font)
@@ -642,23 +801,27 @@ class PythonTesterApp:
 						loaded_dir = Path(config["submissions_dir"])
 						if loaded_dir.exists():
 							self.submissions_dir = loaded_dir
-						else:
-							self.submissions_dir = SUBMISSIONS_DIR
+						# If directory doesn't exist, submissions_dir stays None
+					if "last_opened_file" in config:
+						self.last_opened_file = config["last_opened_file"]
 			except (json.JSONDecodeError, ValueError, KeyError):
 				self.zoom_level = 1.0
-				self.submissions_dir = SUBMISSIONS_DIR
+				# submissions_dir stays None on error
 
 	def _save_config(self) -> None:
 		config = {
-			"zoom_level": self.zoom_level,
-			"submissions_dir": str(self.submissions_dir)
+			"zoom_level": self.zoom_level
 		}
+		if self.submissions_dir is not None:
+			config["submissions_dir"] = str(self.submissions_dir)
+		if hasattr(self, 'last_opened_file'):
+			config["last_opened_file"] = self.last_opened_file
 		CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 def main() -> None:
-	if not SUBMISSIONS_DIR.exists():
-		SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
+	if not DATA_DIR.exists():
+		DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 	root = tk.Tk()
 	PythonTesterApp(root)
