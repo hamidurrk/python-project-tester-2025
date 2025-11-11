@@ -9,12 +9,10 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
-
 BASE_DIR = Path(__file__).resolve().parent
 SUBMISSIONS_DIR = BASE_DIR / "submissions"
 PREDEFINED_INPUTS_PATH = BASE_DIR / "predefined_inputs.json"
 CONFIG_PATH = BASE_DIR / "config.json"
-
 
 class PythonTesterApp:
 	def __init__(self, root: tk.Tk) -> None:
@@ -31,6 +29,7 @@ class PythonTesterApp:
 		self.submissions_dir = SUBMISSIONS_DIR
 
 		self._load_config()
+		self._create_menu()
 		self._build_layout()
 		self._load_predefined_inputs()
 		self._refresh_file_list()
@@ -39,6 +38,25 @@ class PythonTesterApp:
 		self._apply_zoom()  # Apply loaded zoom level
 
 		self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+	def _create_menu(self) -> None:
+		self.menubar = tk.Menu(self.root)
+		self.root.config(menu=self.menubar)
+
+		# File menu
+		self.file_menu = tk.Menu(self.menubar, tearoff=0)
+		self.menubar.add_cascade(label="File", menu=self.file_menu)
+		self.file_menu.add_command(label="Import Predefined Inputs", command=self._import_predefined_inputs)
+		self.file_menu.add_command(label="Export Predefined Inputs", command=self._export_predefined_inputs)
+		self.file_menu.add_separator()
+		self.file_menu.add_command(label="Exit", command=self._on_close)
+
+		# View menu
+		self.view_menu = tk.Menu(self.menubar, tearoff=0)
+		self.menubar.add_cascade(label="View", menu=self.view_menu)
+		self.view_menu.add_command(label="Zoom In", command=self._zoom_in, accelerator="Ctrl++")
+		self.view_menu.add_command(label="Zoom Out", command=self._zoom_out, accelerator="Ctrl+-")
+		self.view_menu.add_command(label="Reset Zoom", command=self._reset_zoom, accelerator="Ctrl+0")
 
 	def _build_layout(self) -> None:
 		self.root.columnconfigure(0, weight=3)
@@ -74,14 +92,17 @@ class PythonTesterApp:
 		controls.grid(row=2, column=0, sticky="ew", pady=(0, 8))
 		controls.columnconfigure((0, 1, 2), weight=1)
 
-		self.run_button = ttk.Button(controls, text="Run", command=self._run_selected_file)
-		self.run_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+		self.run_button = tk.Button(controls, text="▶ Run", command=self._run_selected_file, 
+									 relief="raised", cursor="hand2")
+		self.run_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=2)
 
-		self.stop_button = ttk.Button(controls, text="Stop", command=self._stop_process, state="disabled")
-		self.stop_button.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+		self.stop_button = tk.Button(controls, text="■ Stop", command=self._stop_process, 
+									  relief="raised", cursor="hand2", state="disabled")
+		self.stop_button.grid(row=0, column=1, sticky="ew", padx=(0, 6), pady=2)
 
-		self.clear_button = ttk.Button(controls, text="Clear", command=self._clear_terminal)
-		self.clear_button.grid(row=0, column=2, sticky="ew")
+		self.clear_button = tk.Button(controls, text="Clear", command=self._clear_terminal,
+									   relief="raised", cursor="hand2")
+		self.clear_button.grid(row=0, column=2, sticky="ew", pady=2)
 
 		terminal_frame = ttk.LabelFrame(main_frame, text="Terminal")
 		terminal_frame.grid(row=3, column=0, sticky="nsew")
@@ -117,7 +138,7 @@ class PythonTesterApp:
 		label_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 		label_row.columnconfigure(0, weight=1)
 
-		ttk.Label(label_row, text="Double-click to send (# for labels)").grid(row=0, column=0, sticky="w")
+		ttk.Label(label_row, text="Press Enter or Space to send\nDouble click to edit").grid(row=0, column=0, sticky="w")
 
 		move_up_button = ttk.Button(label_row, text="↑", width=3, command=self._move_predefined_up)
 		move_up_button.grid(row=0, column=1, padx=(6, 3))
@@ -128,6 +149,13 @@ class PythonTesterApp:
 		self.predefined_listbox = tk.Listbox(sidebar, height=15)
 		self.predefined_listbox.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
 		self.predefined_listbox.bind("<Double-Button-1>", self._handle_predefined_double_click)
+		self.predefined_listbox.bind("<Return>", lambda e: self._send_selected_predefined())
+		self.predefined_listbox.bind("<space>", lambda e: self._handle_space_key())
+		self.predefined_listbox.bind("<Control-e>", lambda e: self._edit_selected_predefined())
+		
+		# Variable to track inline editing
+		self.edit_entry = None
+		self.edit_index = None
 
 		predefined_buttons = ttk.Frame(sidebar)
 		predefined_buttons.grid(row=2, column=0, sticky="ew", pady=(0, 12))
@@ -140,7 +168,7 @@ class PythonTesterApp:
 		send_button = ttk.Button(predefined_buttons, text="Send", command=self._send_selected_predefined)
 		send_button.grid(row=0, column=1, sticky="ew")
 
-		ttk.Label(sidebar, text="Add New Input").grid(row=3, column=0, sticky="w")
+		ttk.Label(sidebar, text="Add New Input (# for labels)").grid(row=3, column=0, sticky="w")
 
 		add_row = ttk.Frame(sidebar)
 		add_row.grid(row=4, column=0, sticky="ew")
@@ -228,7 +256,6 @@ class PythonTesterApp:
 		self.run_button.configure(state="disabled")
 		self.stop_button.configure(state="normal")
 
-		# Launch background reader to keep UI responsive.
 		self.output_thread = threading.Thread(target=self._read_process_output, daemon=True)
 		self.output_thread.start()
 
@@ -287,11 +314,9 @@ class PythonTesterApp:
 			current_index = selection[0]
 			value = self.predefined_listbox.get(current_index)
 			
-			# Skip labels (entries starting with #)
 			if not value.strip().startswith("#"):
 				self._send_to_process(value)
 			
-			# Select the next item in the list
 			next_index = current_index + 1
 			if next_index < self.predefined_listbox.size():
 				self.predefined_listbox.selection_clear(0, tk.END)
@@ -299,7 +324,80 @@ class PythonTesterApp:
 				self.predefined_listbox.see(next_index)
 
 	def _handle_predefined_double_click(self, event: tk.Event) -> None:
+		"""Handle double-click to edit the item inline"""
+		self._edit_selected_predefined()
+
+	def _edit_selected_predefined(self) -> None:
+		"""Start inline editing of the selected predefined input"""
+		selection = self.predefined_listbox.curselection()
+		if not selection:
+			return
+		
+		# If already editing, finish that edit first
+		if self.edit_entry:
+			self._finish_edit()
+			return
+		
+		index = selection[0]
+		self.edit_index = index
+		
+		# Get the position and size of the selected item
+		bbox = self.predefined_listbox.bbox(index)
+		if not bbox:
+			return
+		
+		x, y, width, height = bbox
+		
+		current_value = self.predefined_listbox.get(index)
+		
+		listbox_width = self.predefined_listbox.winfo_width() - 10
+		
+		self.edit_entry = tk.Entry(self.predefined_listbox)
+		self.edit_entry.insert(0, current_value)
+		self.edit_entry.select_range(0, tk.END)
+		self.edit_entry.place(x=0, y=y, width=listbox_width, height=height)
+		self.edit_entry.focus_set()
+		
+		self.edit_entry.bind("<Return>", lambda e: self._finish_edit())
+		self.edit_entry.bind("<Escape>", lambda e: self._cancel_edit())
+		self.edit_entry.bind("<FocusOut>", lambda e: self._finish_edit())
+
+	def _finish_edit(self) -> None:
+		"""Finish editing and save the changes"""
+		if not self.edit_entry or self.edit_index is None:
+			return
+		
+		new_value = self.edit_entry.get()
+		
+		# Update the predefined inputs list
+		if new_value.strip():  # Only save if not empty
+			self.predefined_inputs[self.edit_index] = new_value
+			self._save_predefined_inputs()
+			self._reload_predefined_listbox()
+			
+			# Reselect the edited item
+			self.predefined_listbox.selection_set(self.edit_index)
+			self.predefined_listbox.see(self.edit_index)
+		
+		# Clean up
+		self.edit_entry.destroy()
+		self.edit_entry = None
+		self.edit_index = None
+
+	def _cancel_edit(self) -> None:
+		"""Cancel editing without saving changes"""
+		if not self.edit_entry:
+			return
+		
+		# Clean up
+		self.edit_entry.destroy()
+		self.edit_entry = None
+		self.edit_index = None
+
+	def _handle_space_key(self) -> None:
+		"""Handle spacebar press - send input and move to next, preventing default toggle behavior"""
 		self._send_selected_predefined()
+		return "break"  # Prevent default spacebar behavior
 
 	def _send_to_process(self, text: str) -> None:
 		if not self.process or self.process.poll() is not None or not self.process.stdin:
@@ -335,14 +433,11 @@ class PythonTesterApp:
 		self._save_predefined_inputs()
 		self._reload_predefined_listbox()
 		
-		# Select the next item, or the last item if we removed the last one
 		if len(self.predefined_inputs) > 0:
 			if index < len(self.predefined_inputs):
-				# Select the item that moved into the deleted item's position
 				self.predefined_listbox.selection_set(index)
 				self.predefined_listbox.see(index)
 			else:
-				# We removed the last item, select the new last item
 				self.predefined_listbox.selection_set(len(self.predefined_inputs) - 1)
 				self.predefined_listbox.see(len(self.predefined_inputs) - 1)
 
@@ -355,14 +450,12 @@ class PythonTesterApp:
 		if index == 0:
 			return  # Already at the top
 
-		# Swap with the item above
 		self.predefined_inputs[index], self.predefined_inputs[index - 1] = \
 			self.predefined_inputs[index - 1], self.predefined_inputs[index]
 		
 		self._save_predefined_inputs()
 		self._reload_predefined_listbox()
 		
-		# Keep the item selected at its new position
 		self.predefined_listbox.selection_set(index - 1)
 		self.predefined_listbox.see(index - 1)
 
@@ -375,14 +468,12 @@ class PythonTesterApp:
 		if index >= len(self.predefined_inputs) - 1:
 			return  # Already at the bottom
 
-		# Swap with the item below
 		self.predefined_inputs[index], self.predefined_inputs[index + 1] = \
 			self.predefined_inputs[index + 1], self.predefined_inputs[index]
 		
 		self._save_predefined_inputs()
 		self._reload_predefined_listbox()
 		
-		# Keep the item selected at its new position
 		self.predefined_listbox.selection_set(index + 1)
 		self.predefined_listbox.see(index + 1)
 
@@ -403,6 +494,51 @@ class PythonTesterApp:
 
 		self._reload_predefined_listbox()
 
+	def _import_predefined_inputs(self) -> None:
+		file_path = filedialog.askopenfilename(
+			title="Import Predefined Inputs",
+			filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+			defaultextension=".json"
+		)
+		
+		if not file_path:
+			return
+		
+		try:
+			data = json.loads(Path(file_path).read_text(encoding="utf-8"))
+			if not isinstance(data, list):
+				messagebox.showerror("Import Error", "The file must contain a JSON array.")
+				return
+			
+			self.predefined_inputs = [str(item) for item in data]
+			self._save_predefined_inputs()
+			self._reload_predefined_listbox()
+			messagebox.showinfo("Import Success", f"Imported {len(self.predefined_inputs)} items.")
+		except json.JSONDecodeError:
+			messagebox.showerror("Import Error", "The file is not a valid JSON file.")
+		except Exception as e:
+			messagebox.showerror("Import Error", f"Failed to import file: {e}")
+
+	def _export_predefined_inputs(self) -> None:
+		if not self.predefined_inputs:
+			messagebox.showwarning("Export Warning", "No predefined inputs to export.")
+			return
+		
+		file_path = filedialog.asksaveasfilename(
+			title="Export Predefined Inputs",
+			filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+			defaultextension=".json"
+		)
+		
+		if not file_path:
+			return
+		
+		try:
+			Path(file_path).write_text(json.dumps(self.predefined_inputs, indent=2), encoding="utf-8")
+			messagebox.showinfo("Export Success", f"Exported {len(self.predefined_inputs)} items to:\n{file_path}")
+		except Exception as e:
+			messagebox.showerror("Export Error", f"Failed to export file: {e}")
+
 	def _save_predefined_inputs(self) -> None:
 		PREDEFINED_INPUTS_PATH.write_text(json.dumps(self.predefined_inputs, indent=2), encoding="utf-8")
 
@@ -410,7 +546,6 @@ class PythonTesterApp:
 		self.predefined_listbox.delete(0, tk.END)
 		for i, item in enumerate(self.predefined_inputs):
 			self.predefined_listbox.insert(tk.END, item)
-			# Color labels (entries starting with #) differently
 			if item.strip().startswith("#"):
 				self.predefined_listbox.itemconfig(i, fg="blue", selectbackground="lightblue")
 
@@ -440,6 +575,7 @@ class PythonTesterApp:
 		self.root.bind("<Control-plus>", lambda e: self._zoom_in())
 		self.root.bind("<Control-equal>", lambda e: self._zoom_in())  # Ctrl+= (same key as +)
 		self.root.bind("<Control-minus>", lambda e: self._zoom_out())
+		self.root.bind("<Control-Key-0>", lambda e: self._reset_zoom())
 
 	def _handle_mouse_zoom(self, event: tk.Event) -> None:
 		if event.delta > 0:
@@ -457,28 +593,43 @@ class PythonTesterApp:
 		self._apply_zoom()
 		self._save_config()
 
+	def _reset_zoom(self) -> None:
+		self.zoom_level = 1.0
+		self._apply_zoom()
+		self._save_config()
+
 	def _apply_zoom(self) -> None:
-		# Calculate font size based on zoom level
 		base_font_size = 9
 		new_font_size = int(base_font_size * self.zoom_level)
 		
-		# Update default font for all ttk widgets
 		style = ttk.Style()
 		style.configure(".", font=("TkDefaultFont", new_font_size))
 		
-		# Update text widgets font
 		text_font_size = int(10 * self.zoom_level)
 		self.output_text.configure(font=("TkFixedFont", text_font_size))
 		
-		# Update entry widgets and combobox font
 		entry_font = ("TkDefaultFont", new_font_size)
 		self.file_combo.configure(font=entry_font)
 		self.manual_entry.configure(font=entry_font)
 		self.new_input_entry.configure(font=entry_font)
 		
-		# Update listbox font
 		listbox_font = ("TkDefaultFont", new_font_size)
 		self.predefined_listbox.configure(font=listbox_font)
+		
+		# Update control buttons (tk.Button) font
+		button_font = ("TkDefaultFont", new_font_size)
+		self.run_button.configure(font=button_font)
+		self.stop_button.configure(font=button_font)
+		self.clear_button.configure(font=button_font)
+		
+		# Update menu bar font - use a specific font tuple
+		menu_font = ("Segoe UI", new_font_size)
+		try:
+			self.menubar.config(font=menu_font)
+			self.file_menu.config(font=menu_font)
+			self.view_menu.config(font=menu_font)
+		except Exception:
+			pass
 
 	def _load_config(self) -> None:
 		if CONFIG_PATH.exists():
@@ -492,10 +643,8 @@ class PythonTesterApp:
 						if loaded_dir.exists():
 							self.submissions_dir = loaded_dir
 						else:
-							# Directory doesn't exist, revert to default
 							self.submissions_dir = SUBMISSIONS_DIR
 			except (json.JSONDecodeError, ValueError, KeyError):
-				# If config is corrupted, use defaults
 				self.zoom_level = 1.0
 				self.submissions_dir = SUBMISSIONS_DIR
 
