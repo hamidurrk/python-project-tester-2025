@@ -10,6 +10,10 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
+from pygments import lex
+from pygments.lexers import PythonLexer
+from pygments.token import Token
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 PREDEFINED_INPUTS_PATH = BASE_DIR / "predefined_inputs.json"
@@ -94,9 +98,9 @@ class PythonTesterApp:
 
 		controls = ttk.Frame(main_frame)
 		controls.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-		controls.columnconfigure((0, 1, 2), weight=1)
+		controls.columnconfigure((0, 1, 2, 3, 4), weight=1)
 
-		self.run_button = tk.Button(controls, text="▶ Run", command=self._run_selected_file, 
+		self.run_button = tk.Button(controls, text="▶ Run", command=self._run_selected_file,
 									 relief="raised", cursor="hand2")
 		self.run_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=2)
 
@@ -106,7 +110,15 @@ class PythonTesterApp:
 
 		self.clear_button = tk.Button(controls, text="Clear", command=self._clear_terminal,
 									   relief="raised", cursor="hand2")
-		self.clear_button.grid(row=0, column=2, sticky="ew", pady=2)
+		self.clear_button.grid(row=0, column=2, sticky="ew", padx=(0, 6), pady=2)
+
+		self.open_code_button = tk.Button(controls, text="Open Code", command=self._open_code_viewer,
+										   relief="raised", cursor="hand2")
+		self.open_code_button.grid(row=0, column=3, sticky="ew", padx=(0, 6), pady=2)
+
+		self.open_files_button = tk.Button(controls, text="Open Files", command=self._open_files_viewer,
+											relief="raised", cursor="hand2")
+		self.open_files_button.grid(row=0, column=4, sticky="ew", pady=2)
 
 		terminal_frame = ttk.LabelFrame(main_frame, text="Terminal")
 		terminal_frame.grid(row=3, column=0, sticky="nsew")
@@ -191,14 +203,12 @@ class PythonTesterApp:
 
 	def _refresh_file_list(self) -> None:
 		if self.submissions_dir is None:
-			# No directory selected
 			self.file_combo["values"] = []
 			if self.file_var.get():
 				self.file_var.set("")
 			return
 		
 		if not self.submissions_dir.exists():
-			# Directory was deleted or is inaccessible
 			messagebox.showwarning("Directory Missing", 
 				f"The directory {self.submissions_dir} no longer exists.\nPlease browse for a new directory.")
 			self.submissions_dir = None
@@ -702,6 +712,265 @@ class PythonTesterApp:
 		except Exception as e:
 			messagebox.showerror("Error", f"Failed to reset files: {e}")
 
+	def _open_code_viewer(self) -> None:
+		if self.submissions_dir is None:
+			messagebox.showwarning("No Directory", "Please browse and select a Python file first.")
+			return
+		
+		selected_file = self.file_var.get()
+		if not selected_file:
+			messagebox.showwarning("No File Selected", "Please select a Python file to view.")
+			return
+		
+		script_path = self.submissions_dir / selected_file
+		if not script_path.exists():
+			messagebox.showerror("File Missing", f"Could not find {selected_file}.")
+			return
+		
+		try:
+			code_content = script_path.read_text(encoding="utf-8")
+		except Exception as e:
+			messagebox.showerror("Error", f"Failed to read file: {e}")
+			return
+		
+		viewer = tk.Toplevel(self.root)
+		viewer.title(f"Code Viewer - {selected_file}")
+		viewer.geometry("800x600")
+		viewer.configure(bg="#1E1E1E")  
+		
+		frame = tk.Frame(viewer, bg="#1E1E1E")
+		frame.pack(fill="both", expand=True, padx=5, pady=5)
+		
+		text_frame = tk.Frame(frame, bg="#1E1E1E")
+		text_frame.pack(fill="both", expand=True)
+		
+		v_scrollbar = tk.Scrollbar(text_frame, bg="#252526", troughcolor="#1E1E1E")
+		v_scrollbar.pack(side="right", fill="y")
+		
+		h_scrollbar = tk.Scrollbar(frame, orient="horizontal", bg="#252526", troughcolor="#1E1E1E")
+		h_scrollbar.pack(side="bottom", fill="x")
+		
+		line_numbers = tk.Text(text_frame, wrap="none",
+							   width=5,
+							   font=("Consolas", 10),
+							   bg="#1E1E1E",
+							   fg="#858585",  
+							   state="disabled",
+							   borderwidth=0,
+							   highlightthickness=0,
+							   padx=5,
+							   takefocus=0)
+		line_numbers.pack(side="left", fill="y")
+		
+		text_widget = tk.Text(text_frame, wrap="none", 
+							  yscrollcommand=v_scrollbar.set,
+							  xscrollcommand=h_scrollbar.set,
+							  font=("Consolas", 10),
+							  bg="#1E1E1E",
+							  fg="#D4D4D4",
+							  insertbackground="#FFFFFF",
+							  selectbackground="#264F78",
+							  selectforeground="#D4D4D4",
+							  borderwidth=0,
+							  highlightthickness=0)
+		text_widget.pack(side="left", fill="both", expand=True)
+		
+		def on_text_scroll(*args):
+			line_numbers.yview_moveto(args[0])
+			v_scrollbar.set(*args)
+		
+		text_widget.config(yscrollcommand=on_text_scroll)
+		v_scrollbar.config(command=lambda *args: (text_widget.yview(*args), line_numbers.yview(*args)))
+		h_scrollbar.config(command=text_widget.xview)
+		
+		text_widget.insert("1.0", code_content)
+		
+		num_lines = code_content.count('\n') + 1
+		line_numbers.config(state="normal")
+		line_numbers.insert("1.0", "\n".join(str(i) for i in range(1, num_lines + 1)))
+		line_numbers.config(state="disabled")
+		
+		self._apply_python_syntax_highlighting(text_widget, code_content)
+		text_widget.config(state="disabled")
+	
+	def _apply_python_syntax_highlighting(self, text_widget: tk.Text, code: str) -> None:
+		"""Apply syntax highlighting using Pygments with VS Code Dark+ theme colors."""
+		
+		color_scheme = {
+			Token.Keyword: "#C586C0",              
+			Token.Keyword.Constant: "#569CD6",     
+			Token.Keyword.Namespace: "#C586C0",    
+			Token.Name.Builtin: "#4EC9B0",         
+			Token.Name.Builtin.Pseudo: "#569CD6",  
+			Token.Name.Function: "#DCDCAA",        
+			Token.Name.Class: "#4EC9B0",           
+			Token.Name.Decorator: "#DCDCAA",       
+			Token.String: "#CE9178",               
+			Token.String.Doc: "#6A9955",           
+			Token.Number: "#B5CEA8",               
+			Token.Comment: "#6A9955",              
+			Token.Comment.Single: "#6A9955",       
+			Token.Comment.Multiline: "#6A9955",    
+			Token.Operator: "#D4D4D4",             
+			Token.Punctuation: "#D4D4D4",          
+			Token.Name: "#9CDCFE",                 
+		}
+		
+		text_widget.tag_config("highlight_open", background="#3A291F")   
+		text_widget.tag_config("highlight_close", background="#1F3A1F")  
+		
+		for token_type, color in color_scheme.items():
+			tag_name = str(token_type)
+			if token_type in (Token.Comment, Token.Comment.Single, Token.Comment.Multiline):
+				text_widget.tag_config(tag_name, foreground=color, font=("Consolas", 10, "italic"))
+			else:
+				text_widget.tag_config(tag_name, foreground=color)
+		
+		lines = code.split('\n')
+		for line_num, line in enumerate(lines, start=1):
+			has_open = 'open(' in line
+			has_close = '.close(' in line
+			
+			if has_open or has_close:
+				start_idx = f"{line_num}.0"
+				end_idx = f"{line_num}.end+1c"
+				
+				if has_open:
+					text_widget.tag_add("highlight_open", start_idx, end_idx)
+				if has_close:
+					text_widget.tag_add("highlight_close", start_idx, end_idx)
+		
+		lexer = PythonLexer()
+		tokens = lex(code, lexer)
+		
+		position = 0
+		for token_type, token_value in tokens:
+			token_length = len(token_value)
+			if token_length > 0:
+				start_idx = f"1.0+{position}c"
+				end_idx = f"1.0+{position + token_length}c"
+				
+				tag_name = str(token_type)
+				text_widget.tag_add(tag_name, start_idx, end_idx)
+				
+			position += token_length
+		
+		text_widget.tag_raise("highlight_open")
+		text_widget.tag_raise("highlight_close")
+	
+	def _open_files_viewer(self) -> None:
+		if self.submissions_dir is None:
+			messagebox.showwarning("No Directory", "Please browse and select a directory first.")
+			return
+		
+		if not DATA_DIR.exists() or not list(DATA_DIR.glob("*.txt")):
+			messagebox.showwarning("No Data Files", "No stored data files found. Please add files in Settings.")
+			return
+		
+		data_files_to_display = []
+		for data_file in DATA_DIR.glob("*.txt"):
+			target_file = self.submissions_dir / data_file.name
+			if target_file.exists():
+				data_files_to_display.append(target_file)
+		data_files_to_display.sort(reverse=True)
+		
+		if not data_files_to_display:
+			messagebox.showinfo("No Files", "No data files found in the selected directory.\nUse 'Reset Files' to copy them.")
+			return
+		
+		viewer = tk.Toplevel(self.root)
+		viewer.title("Data Files Viewer")
+		viewer.geometry("900x700")
+		
+		main_canvas = tk.Canvas(viewer)
+		main_scrollbar = ttk.Scrollbar(viewer, orient="vertical", command=main_canvas.yview)
+		scrollable_frame = ttk.Frame(main_canvas)
+		
+		scrollable_frame.bind(
+			"<Configure>",
+			lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+		)
+		
+		main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+		main_canvas.configure(yscrollcommand=main_scrollbar.set)
+		
+		main_canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+		main_scrollbar.pack(side="right", fill="y")
+		
+		def on_mousewheel(event):
+			main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+		main_canvas.bind_all("<MouseWheel>", on_mousewheel)
+		
+		rainbow_colors = ["#DC143C", "#FF8C00", "#32CD32", "#FF1493", "#1E90FF", 
+						  "#9370DB", "#FF1493", "#00CED1", "#FF4500", "#228B22"]
+		
+		for file_idx, file_path in enumerate(data_files_to_display):
+			self._create_collapsible_csv_viewer(scrollable_frame, file_path, file_idx, rainbow_colors)
+	
+	def _create_collapsible_csv_viewer(self, parent: ttk.Frame, file_path: Path, idx: int, colors: list) -> None:
+		file_frame = ttk.LabelFrame(parent, text=file_path.name, padding=5)
+		file_frame.pack(fill="both", expand=True, padx=5, pady=5)
+		
+		is_collapsed = tk.BooleanVar(value=False)
+		
+		header_frame = ttk.Frame(file_frame)
+		header_frame.pack(fill="x")
+		
+		toggle_button = ttk.Button(header_frame, text="▼ Collapse", width=12)
+		toggle_button.pack(side="left", padx=5, pady=2)
+		
+		content_frame = ttk.Frame(file_frame)
+		content_frame.pack(fill="both", expand=True, pady=(5, 0))
+		
+		try:
+			content = file_path.read_text(encoding="utf-8")
+		except Exception as e:
+			error_label = ttk.Label(content_frame, text=f"Error reading file: {e}", foreground="red")
+			error_label.pack()
+			return
+		
+		lines = content.strip().split('\n')
+		num_lines = len(lines)
+		
+		text_widget = tk.Text(content_frame, wrap="none",
+							  font=("Consolas", 11, "bold"),
+							  bg="white",
+							  borderwidth=2,
+							  relief="solid",
+							  padx=10,
+							  pady=10)
+		text_widget.pack(fill="both", expand=False, padx=5, pady=5)
+		
+		if lines:
+			first_line = lines[0]
+			delimiter = ',' if ',' in first_line else '\t'
+			
+			for i, color in enumerate(colors):
+				text_widget.tag_config(f"col{i}", foreground=color, font=("Consolas", 11, "bold"))
+			
+			for line in lines:
+				columns = line.split(delimiter)
+				for col_idx, column in enumerate(columns):
+					color_idx = col_idx % len(colors)
+					text_widget.insert("end", column, f"col{color_idx}")
+					if col_idx < len(columns) - 1:
+						text_widget.insert("end", delimiter)
+				text_widget.insert("end", "\n")
+		
+		text_widget.config(height=num_lines, state="disabled")
+		
+		def toggle_collapse():
+			if is_collapsed.get():
+				content_frame.pack(fill="both", expand=True, pady=(5, 0))
+				toggle_button.config(text="▼ Collapse")
+				is_collapsed.set(False)
+			else:
+				content_frame.pack_forget()
+				toggle_button.config(text="▶ Expand")
+				is_collapsed.set(True)
+		
+		toggle_button.config(command=toggle_collapse)
+
 	def _save_predefined_inputs(self) -> None:
 		PREDEFINED_INPUTS_PATH.write_text(json.dumps(self.predefined_inputs, indent=2), encoding="utf-8")
 
@@ -781,6 +1050,8 @@ class PythonTesterApp:
 		self.run_button.configure(font=button_font)
 		self.stop_button.configure(font=button_font)
 		self.clear_button.configure(font=button_font)
+		self.open_code_button.configure(font=button_font)
+		self.open_files_button.configure(font=button_font)
 		
 		menu_font = ("Segoe UI", new_font_size)
 		try:
@@ -801,12 +1072,10 @@ class PythonTesterApp:
 						loaded_dir = Path(config["submissions_dir"])
 						if loaded_dir.exists():
 							self.submissions_dir = loaded_dir
-						# If directory doesn't exist, submissions_dir stays None
 					if "last_opened_file" in config:
 						self.last_opened_file = config["last_opened_file"]
 			except (json.JSONDecodeError, ValueError, KeyError):
 				self.zoom_level = 1.0
-				# submissions_dir stays None on error
 
 	def _save_config(self) -> None:
 		config = {
