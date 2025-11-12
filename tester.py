@@ -14,6 +14,9 @@ from pygments import lex
 from pygments.lexers import PythonLexer
 from pygments.token import Token
 
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 PREDEFINED_INPUTS_PATH = BASE_DIR / "predefined_inputs.json"
@@ -22,7 +25,7 @@ CONFIG_PATH = BASE_DIR / "config.json"
 class PythonTesterApp:
 	def __init__(self, root: tk.Tk) -> None:
 		self.root = root
-		self.root.title("Submission Runner")
+		self.root.title("Project Tester")
 
 		self.process: subprocess.Popen | None = None
 		self.output_queue: queue.Queue[str] = queue.Queue()
@@ -40,8 +43,7 @@ class PythonTesterApp:
 		self._refresh_file_list()
 		self._poll_output_queue()
 		self._setup_zoom_bindings()
-		self._apply_zoom()  # Apply loaded zoom level
-
+		self._apply_zoom()  
 		self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
 	def _create_menu(self) -> None:
@@ -816,7 +818,7 @@ class PythonTesterApp:
 			Token.Name: "#9CDCFE",                 
 		}
 		
-		text_widget.tag_config("highlight_open", background="#3A291F")   
+		text_widget.tag_config("highlight_open", background="#1F303A")   
 		text_widget.tag_config("highlight_close", background="#1F3A1F")  
 		
 		for token_type, color in color_scheme.items():
@@ -879,7 +881,7 @@ class PythonTesterApp:
 			return
 		
 		viewer = tk.Toplevel(self.root)
-		viewer.title("Data Files Viewer")
+		viewer.title("Data Files Viewer (Live)")
 		viewer.geometry("900x700")
 		
 		main_canvas = tk.Canvas(viewer)
@@ -899,15 +901,78 @@ class PythonTesterApp:
 		
 		def on_mousewheel(event):
 			main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-		main_canvas.bind_all("<MouseWheel>", on_mousewheel)
+		
+		viewer.bind("<MouseWheel>", on_mousewheel)
 		
 		rainbow_colors = ["#DC143C", "#FF8C00", "#32CD32", "#FF1493", "#1E90FF", 
 						  "#9370DB", "#FF1493", "#00CED1", "#FF4500", "#228B22"]
 		
+		file_viewers = {}
+		
 		for file_idx, file_path in enumerate(data_files_to_display):
-			self._create_collapsible_csv_viewer(scrollable_frame, file_path, file_idx, rainbow_colors)
+			text_widget = self._create_collapsible_csv_viewer(scrollable_frame, file_path, file_idx, rainbow_colors)
+			if text_widget:
+				file_viewers[str(file_path)] = text_widget
+		
+		class FileChangeHandler(FileSystemEventHandler):
+			def __init__(self, viewer_window, file_viewers_dict, colors):
+				self.viewer_window = viewer_window
+				self.file_viewers = file_viewers_dict
+				self.colors = colors
+			
+			def on_modified(self, event):
+				if event.is_directory:
+					return
+				
+				file_path = Path(event.src_path)
+				if file_path.suffix == '.txt' and str(file_path) in self.file_viewers:
+					self.viewer_window.after(100, lambda: self._update_file_content(file_path))
+			
+			def _update_file_content(self, file_path):
+				if str(file_path) not in self.file_viewers:
+					return
+				
+				text_widget = self.file_viewers[str(file_path)]
+				if not text_widget.winfo_exists():
+					return
+				
+				try:
+					content = file_path.read_text(encoding="utf-8")
+					lines = content.strip().split('\n')
+					
+					first_line = lines[0] if lines else ""
+					delimiter = ',' if ',' in first_line else '\t'
+					
+					text_widget.config(state="normal")
+					text_widget.delete("1.0", tk.END)
+					
+					for line in lines:
+						columns = line.split(delimiter)
+						for col_idx, column in enumerate(columns):
+							color_idx = col_idx % len(self.colors)
+							text_widget.insert("end", column, f"col{color_idx}")
+							if col_idx < len(columns) - 1:
+								text_widget.insert("end", delimiter)
+						text_widget.insert("end", "\n")
+					
+					text_widget.config(height=len(lines), state="disabled")
+				except Exception as e:
+					print(f"Error updating {file_path}: {e}")
+		
+		event_handler = FileChangeHandler(viewer, file_viewers, rainbow_colors)
+		observer = Observer()
+		observer.schedule(event_handler, str(self.submissions_dir), recursive=False)
+		observer.start()
+		
+		def on_viewer_close():
+			viewer.unbind("<MouseWheel>")
+			observer.stop()
+			observer.join()
+			viewer.destroy()
+		
+		viewer.protocol("WM_DELETE_WINDOW", on_viewer_close)
 	
-	def _create_collapsible_csv_viewer(self, parent: ttk.Frame, file_path: Path, idx: int, colors: list) -> None:
+	def _create_collapsible_csv_viewer(self, parent: ttk.Frame, file_path: Path, idx: int, colors: list) -> tk.Text | None:
 		file_frame = ttk.LabelFrame(parent, text=file_path.name, padding=5)
 		file_frame.pack(fill="both", expand=True, padx=5, pady=5)
 		
@@ -927,7 +992,7 @@ class PythonTesterApp:
 		except Exception as e:
 			error_label = ttk.Label(content_frame, text=f"Error reading file: {e}", foreground="red")
 			error_label.pack()
-			return
+			return None
 		
 		lines = content.strip().split('\n')
 		num_lines = len(lines)
@@ -970,6 +1035,8 @@ class PythonTesterApp:
 				is_collapsed.set(True)
 		
 		toggle_button.config(command=toggle_collapse)
+		
+		return text_widget
 
 	def _save_predefined_inputs(self) -> None:
 		PREDEFINED_INPUTS_PATH.write_text(json.dumps(self.predefined_inputs, indent=2), encoding="utf-8")
