@@ -17,10 +17,32 @@ from pygments.token import Token
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-BASE_DIR = Path(__file__).resolve().parent
+def get_base_dir():
+	if getattr(sys, 'frozen', False):
+		documents = Path.home() / "Documents"
+		app_dir = documents / "Project Tester"
+		app_dir.mkdir(parents=True, exist_ok=True)
+		return app_dir
+	else:
+		return Path(__file__).resolve().parent
+
+def get_resource_path(relative_path):
+	if getattr(sys, 'frozen', False):
+		base_path = Path(sys._MEIPASS)
+	else:
+		base_path = Path(__file__).resolve().parent
+	return base_path / relative_path
+
+BASE_DIR = get_base_dir()
 DATA_DIR = BASE_DIR / "data"
+ASSETS_DIR = BASE_DIR / "assets"
 PREDEFINED_INPUTS_PATH = BASE_DIR / "predefined_inputs.json"
 CONFIG_PATH = BASE_DIR / "config.json"
+
+if getattr(sys, 'frozen', False):
+	ICON_PATH = get_resource_path("assets/icon.png")
+else:
+	ICON_PATH = ASSETS_DIR / "icon.png"
 
 GRADE_SCALE = {
     "5": (90, 100),
@@ -44,6 +66,12 @@ class PythonTesterApp:
 	def __init__(self, root: tk.Tk) -> None:
 		self.root = root
 		self.root.title("Project Tester")
+		
+		if ICON_PATH.exists():
+			try:
+				self.root.iconphoto(True, tk.PhotoImage(file=str(ICON_PATH)))
+			except Exception as e:
+				print(f"Failed to load icon: {e}")
 
 		self.process: subprocess.Popen | None = None
 		self.output_queue: queue.Queue[str] = queue.Queue()
@@ -91,7 +119,7 @@ class PythonTesterApp:
 		self.root.columnconfigure(1, weight=2)
 		self.root.rowconfigure(0, weight=0) 
 		self.root.rowconfigure(1, weight=1)  
-		
+
 		main_frame = ttk.Frame(self.root, padding=12)
 		main_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
 		main_frame.columnconfigure(0, weight=1)
@@ -309,7 +337,6 @@ class PythonTesterApp:
 		self._update_directory_label()
 	
 	def _update_directory_label(self) -> None:
-		"""Update the directory label to show the current directory or 'None'."""
 		if self.submissions_dir is None:
 			self.directory_label.config(text="Directory: None", foreground="gray")
 		else:
@@ -405,7 +432,7 @@ class PythonTesterApp:
 
 		return_code = self.process.wait()
 		self.output_queue.put(f"\nProcess exited with code {return_code}.\n")
-		self.output_queue.put(None)  # Sentinel to mark completion.
+		self.output_queue.put(None)  
 
 	def _poll_output_queue(self) -> None:
 		try:
@@ -452,11 +479,9 @@ class PythonTesterApp:
 				self.predefined_listbox.see(next_index)
 
 	def _handle_predefined_double_click(self, event: tk.Event) -> None:
-		"""Handle double-click to edit the item inline"""
 		self._edit_selected_predefined()
 
 	def _edit_selected_predefined(self) -> None:
-		"""Start inline editing of the selected predefined input"""
 		selection = self.predefined_listbox.curselection()
 		if not selection:
 			return
@@ -489,7 +514,6 @@ class PythonTesterApp:
 		self.edit_entry.bind("<FocusOut>", lambda e: self._finish_edit())
 
 	def _finish_edit(self) -> None:
-		"""Finish editing and save the changes"""
 		if not self.edit_entry or self.edit_index is None:
 			return
 		
@@ -507,7 +531,6 @@ class PythonTesterApp:
 		self.edit_index = None
 
 	def _cancel_edit(self) -> None:
-		"""Cancel editing without saving changes"""
 		if not self.edit_entry:
 			return
 		
@@ -516,10 +539,9 @@ class PythonTesterApp:
 		self.edit_index = None
 
 	def _handle_space_key(self) -> None:
-		"""Handle spacebar press - send input and move to next, preventing default toggle behavior"""
 		self._send_selected_predefined()
-		return "break"  # Prevent default spacebar behavior
-
+		return "break"  
+	
 	def _send_to_process(self, text: str) -> None:
 		if not self.process or self.process.poll() is not None or not self.process.stdin:
 			messagebox.showwarning("No Active Process", "Start a process before sending input.")
@@ -638,7 +660,6 @@ class PythonTesterApp:
 			messagebox.showerror("Invalid Input", "Please enter a valid number (e.g., -4, +5, or 3)")
 
 	def _reset_points(self) -> None:
-		"""Reset points to 100"""
 		self.current_points = 100
 		self.points_adjust_var.set("-4")
 		self._update_points_display()
@@ -653,7 +674,6 @@ class PythonTesterApp:
 		self.grade_display.config(text=grade, foreground=color)
 	
 	def _calculate_grade(self, points: float) -> str:
-		"""Calculate the grade based on points."""
 		for grade, (min_points, max_points) in GRADE_SCALE.items():
 			if min_points <= points <= max_points:
 				return grade
@@ -914,7 +934,6 @@ class PythonTesterApp:
 		text_widget.config(state="disabled")
 	
 	def _apply_python_syntax_highlighting(self, text_widget: tk.Text, code: str) -> None:
-		"""Apply syntax highlighting using Pygments with VS Code Dark+ theme colors."""
 		
 		color_scheme = {
 			Token.Keyword: "#C586C0",              
@@ -1287,14 +1306,31 @@ class PythonTesterApp:
 		CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
+def initialize_bundled_resources():
+	if not getattr(sys, 'frozen', False):
+		return  
+		
+	bundled_data = get_resource_path("data")
+	if bundled_data.exists() and not DATA_DIR.exists():
+		shutil.copytree(bundled_data, DATA_DIR)
+	
+	bundled_config = get_resource_path("config.json")
+	if bundled_config.exists() and not CONFIG_PATH.exists():
+		shutil.copy(bundled_config, CONFIG_PATH)
+	
+	bundled_inputs = get_resource_path("predefined_inputs.json")
+	if bundled_inputs.exists() and not PREDEFINED_INPUTS_PATH.exists():
+		shutil.copy(bundled_inputs, PREDEFINED_INPUTS_PATH)
+
 def main() -> None:
+	initialize_bundled_resources()
+	
 	if not DATA_DIR.exists():
 		DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 	root = tk.Tk()
 	PythonTesterApp(root)
 	root.mainloop()
-
 
 if __name__ == "__main__":
 	main()
