@@ -89,15 +89,22 @@ class PythonTesterApp:
 	def _build_layout(self) -> None:
 		self.root.columnconfigure(0, weight=3)
 		self.root.columnconfigure(1, weight=2)
-		self.root.rowconfigure(0, weight=0)  # Point tracker row
-		self.root.rowconfigure(1, weight=1)  # Main content row
-
+		self.root.rowconfigure(0, weight=0) 
+		self.root.rowconfigure(1, weight=1)  
+		
 		main_frame = ttk.Frame(self.root, padding=12)
 		main_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
 		main_frame.columnconfigure(0, weight=1)
 		main_frame.rowconfigure(3, weight=1)
 
-		ttk.Label(main_frame, text="Submission File").grid(row=0, column=0, sticky="w")
+		header_row = ttk.Frame(main_frame)
+		header_row.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+		header_row.columnconfigure(1, weight=1)
+		
+		ttk.Label(header_row, text="Submission File").grid(row=0, column=0, sticky="w")
+		
+		self.directory_label = ttk.Label(header_row, text="Directory: None", foreground="gray")
+		self.directory_label.grid(row=0, column=1, sticky="w", padx=(20, 0))
 
 		file_row = ttk.Frame(main_frame)
 		file_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
@@ -268,6 +275,7 @@ class PythonTesterApp:
 			self.file_combo["values"] = []
 			if self.file_var.get():
 				self.file_var.set("")
+			self._update_directory_label()
 			return
 		
 		if not self.submissions_dir.exists():
@@ -278,6 +286,7 @@ class PythonTesterApp:
 			self.file_combo["values"] = []
 			if self.file_var.get():
 				self.file_var.set("")
+			self._update_directory_label()
 			return
 
 		try:
@@ -296,6 +305,15 @@ class PythonTesterApp:
 				self.file_var.set(file_names[0])
 		else:
 			self.file_var.set("")
+		
+		self._update_directory_label()
+	
+	def _update_directory_label(self) -> None:
+		"""Update the directory label to show the current directory or 'None'."""
+		if self.submissions_dir is None:
+			self.directory_label.config(text="Directory: None", foreground="gray")
+		else:
+			self.directory_label.config(text=f"Directory: {self.submissions_dir}", foreground="black")
 
 	def _browse_directory(self) -> None:
 		initial_dir = BASE_DIR
@@ -1217,6 +1235,9 @@ class PythonTesterApp:
 		points_font_size = int(10 * self.zoom_level)
 		self.points_display.configure(font=("TkDefaultFont", points_font_size, "bold"))
 		self.grade_display.configure(font=("TkDefaultFont", points_font_size, "bold"))
+		
+		label_font = ("TkDefaultFont", int(8 * self.zoom_level))
+		self.directory_label.configure(font=label_font)
 		
 		button_font = ("TkDefaultFont", new_font_size)
 		self.run_button.configure(font=button_font)
