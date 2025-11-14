@@ -1,13 +1,12 @@
-# Build script for Project Tester executable
-# Run this script to create the standalone .exe file
-
 Write-Host "Building Project Tester executable..." -ForegroundColor Cyan
 Write-Host ""
 
-# Activate virtual environment
+$scriptDir = Split-Path -Parent $PSCommandPath
+$projectRoot = Split-Path -Parent $scriptDir
+Set-Location $projectRoot
+
 & .\.venv\Scripts\Activate.ps1
 
-# Clean previous builds
 if (Test-Path "build") {
     Write-Host "Cleaning build directory..." -ForegroundColor Yellow
     Remove-Item -Recurse -Force build
@@ -18,9 +17,8 @@ if (Test-Path "dist") {
     Remove-Item -Recurse -Force dist
 }
 
-# Build the executable
 Write-Host "Building executable with PyInstaller..." -ForegroundColor Green
-& python -m PyInstaller ProjectTester.spec --clean
+& python -m PyInstaller build_scripts\ProjectTester.spec --clean
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""

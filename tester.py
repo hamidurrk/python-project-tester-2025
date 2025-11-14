@@ -38,6 +38,7 @@ DATA_DIR = BASE_DIR / "data"
 ASSETS_DIR = BASE_DIR / "assets"
 PREDEFINED_INPUTS_PATH = BASE_DIR / "predefined_inputs.json"
 CONFIG_PATH = BASE_DIR / "config.json"
+FEEDBACK_TEMPLATE_PATH = BASE_DIR / "feedback_template.txt"
 
 if getattr(sys, 'frozen', False):
 	ICON_PATH = get_resource_path("assets/icon.png")
@@ -62,16 +63,74 @@ GRADE_COLORS = {
     "F": "#ff0000", 
 }
 
+class ToolTip:
+	def __init__(self, widget, text):
+		self.widget = widget
+		self.text = text
+		self.tooltip_window = None
+		self.widget.bind("<Enter>", self.show_tooltip)
+		self.widget.bind("<Leave>", self.hide_tooltip)
+	
+	def show_tooltip(self, event=None):
+		if self.tooltip_window or not self.text:
+			return
+		x = self.widget.winfo_rootx() + 20
+		y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+		self.tooltip_window = tk.Toplevel(self.widget)
+		self.tooltip_window.wm_overrideredirect(True)
+		self.tooltip_window.wm_geometry(f"+{x}+{y}")
+		label = tk.Label(self.tooltip_window, text=self.text, background="#ffffe0", 
+						relief="solid", borderwidth=1, font=("TkDefaultFont", 8))
+		label.pack()
+	
+	def hide_tooltip(self, event=None):
+		if self.tooltip_window:
+			self.tooltip_window.destroy()
+			self.tooltip_window = None
+
+def get_python_executable():
+	if getattr(sys, 'frozen', False):
+		import os
+		
+		python_cmd = shutil.which('python')
+		if python_cmd:
+			return python_cmd
+			
+		python3_cmd = shutil.which('python3')
+		if python3_cmd:
+			return python3_cmd
+			
+		raise FileNotFoundError(
+			"Python interpreter not found. Please ensure Python is installed and added to PATH.\n"
+			"You can download Python from https://www.python.org/downloads/\n"
+			"Make sure to check 'Add Python to PATH' during installation."
+		)
+	else:
+		return sys.executable
+
 class PythonTesterApp:
 	def __init__(self, root: tk.Tk) -> None:
 		self.root = root
 		self.root.title("Project Tester")
+		
+		self.root.minsize(1024, 600)
+		
+		self.root.state('zoomed')
 		
 		if ICON_PATH.exists():
 			try:
 				self.root.iconphoto(True, tk.PhotoImage(file=str(ICON_PATH)))
 			except Exception as e:
 				print(f"Failed to load icon: {e}")
+		
+		copy_icon_path = ASSETS_DIR / "copy.png" if not getattr(sys, 'frozen', False) else get_resource_path("assets/copy.png")
+		self.copy_icon = None
+		if copy_icon_path.exists():
+			try:
+				original_icon = tk.PhotoImage(file=str(copy_icon_path))
+				self.copy_icon = original_icon.subsample(6, 6)  
+			except Exception as e:
+				print(f"Failed to load copy icon: {e}")
 
 		self.process: subprocess.Popen | None = None
 		self.output_queue: queue.Queue[str] = queue.Queue()
@@ -83,6 +142,8 @@ class PythonTesterApp:
 		self.submissions_dir: Path | None = None
 		self.current_points = 100
 		self.last_file_for_points = None
+		self.feedback_text: ScrolledText | None = None  
+		self._resize_scheduled = False  
 
 		self._load_config()
 		self._create_menu()
@@ -117,11 +178,14 @@ class PythonTesterApp:
 	def _build_layout(self) -> None:
 		self.root.columnconfigure(0, weight=3)
 		self.root.columnconfigure(1, weight=2)
-		self.root.rowconfigure(0, weight=0) 
-		self.root.rowconfigure(1, weight=1)  
+		self.root.rowconfigure(0, weight=0)  # Points frame
+		self.root.rowconfigure(1, weight=1)  # Predefined inputs (expandable)
+		self.root.rowconfigure(2, weight=0)  # Feedback frame  
+		
+		self.root.bind("<Configure>", self._on_window_resize)
 
 		main_frame = ttk.Frame(self.root, padding=12)
-		main_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
+		main_frame.grid(row=0, column=0, rowspan=3, sticky="nsew")
 		main_frame.columnconfigure(0, weight=1)
 		main_frame.rowconfigure(3, weight=1)
 
@@ -212,18 +276,34 @@ class PythonTesterApp:
 		
 		points_grade_frame = ttk.Frame(points_frame)
 		points_grade_frame.grid(row=0, column=1, sticky="ew")
-		points_grade_frame.columnconfigure(1, weight=1)  
+		points_grade_frame.columnconfigure(2, weight=1)  
 		
-		self.points_display = ttk.Label(points_grade_frame, text="100.0", font=("TkDefaultFont", 8, "bold"), foreground="green")
+		self.points_display = ttk.Label(points_grade_frame, text="100", font=("TkDefaultFont", 8, "bold"), foreground="green")
 		self.points_display.grid(row=0, column=0, sticky="w")
 		
+		if self.copy_icon:
+			copy_points_button = tk.Button(points_grade_frame, image=self.copy_icon, command=self._copy_points, 
+										   relief="flat", cursor="hand2", bd=0, bg=self.root.cget('bg'))
+		else:
+			copy_points_button = ttk.Button(points_grade_frame, text="📋", width=3, command=self._copy_points)
+		copy_points_button.grid(row=0, column=1, sticky="w", padx=(4, 0))
+		ToolTip(copy_points_button, "Copy")
+		
 		grade_container = ttk.Frame(points_grade_frame)
-		grade_container.grid(row=0, column=1, sticky="e", padx=(8, 0))
+		grade_container.grid(row=0, column=3, sticky="e", padx=(0, 8))
 		
 		ttk.Label(grade_container, text="Grade: ").grid(row=0, column=0, sticky="e")
 		
 		self.grade_display = ttk.Label(grade_container, text="5", font=("TkDefaultFont", 8, "bold"), foreground="green")
 		self.grade_display.grid(row=0, column=1, sticky="e")
+		
+		if self.copy_icon:
+			copy_grade_button = tk.Button(grade_container, image=self.copy_icon, command=self._copy_grade,
+										  relief="flat", cursor="hand2", bd=0, bg=self.root.cget('bg'))
+		else:
+			copy_grade_button = ttk.Button(grade_container, text="📋", width=3, command=self._copy_grade)
+		copy_grade_button.grid(row=0, column=2, sticky="w", padx=(4, 0))
+		ToolTip(copy_grade_button, "Copy")
 
 		ttk.Label(points_frame, text="Adjust Points:").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(6, 0))
 		
@@ -242,8 +322,8 @@ class PythonTesterApp:
 		reset_button = ttk.Button(adjust_row, text="Reset", command=self._reset_points, width=8)
 		reset_button.grid(row=0, column=2, padx=(6, 0))
 
-		sidebar = ttk.LabelFrame(self.root, text="Predefined Inputs", padding=12)
-		sidebar.grid(row=1, column=1, sticky="nsew", padx=(0, 12), pady=(6, 12))
+		sidebar = ttk.LabelFrame(self.root, text="Preset Inputs", padding=12)
+		sidebar.grid(row=1, column=1, sticky="nsew", padx=(0, 12), pady=(6, 6))
 		sidebar.columnconfigure(0, weight=1)
 		sidebar.rowconfigure(1, weight=1)
 
@@ -251,7 +331,8 @@ class PythonTesterApp:
 		label_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 		label_row.columnconfigure(0, weight=1)
 
-		ttk.Label(label_row, text="Press Enter or Space to send\nDouble click to edit").grid(row=0, column=0, sticky="w")
+		hotkeys_button = ttk.Button(label_row, text="Shortcuts", command=self._show_hotkeys_dialog)
+		hotkeys_button.grid(row=0, column=0, sticky="w")
 
 		move_up_button = ttk.Button(label_row, text="↑", width=3, command=self._move_predefined_up)
 		move_up_button.grid(row=0, column=1, padx=(6, 3))
@@ -266,6 +347,9 @@ class PythonTesterApp:
 		self.predefined_listbox.bind("<space>", lambda e: self._handle_space_key())
 		self.predefined_listbox.bind("<Control-e>", lambda e: self._edit_selected_predefined())
 		self.predefined_listbox.bind("<Button-3>", self._show_context_menu)
+		self.predefined_listbox.bind("<Control-Return>", lambda e: self._insert_row_below())
+		self.predefined_listbox.bind("<Delete>", lambda e: self._remove_selected_predefined())
+		self.predefined_listbox.bind("<FocusIn>", lambda e: self._check_predefined_empty())
 		
 		self.context_menu = tk.Menu(self.predefined_listbox, tearoff=0)
 		self.context_menu.add_command(label="Insert row below", command=self._insert_row_below)
@@ -284,19 +368,29 @@ class PythonTesterApp:
 		send_button = ttk.Button(predefined_buttons, text="Send", command=self._send_selected_predefined)
 		send_button.grid(row=0, column=1, sticky="ew")
 
-		ttk.Label(sidebar, text="Add New Input (# for labels)").grid(row=3, column=0, sticky="w")
-
-		add_row = ttk.Frame(sidebar)
-		add_row.grid(row=4, column=0, sticky="ew")
-		add_row.columnconfigure(0, weight=1)
-
-		self.new_input_var = tk.StringVar()
-		self.new_input_entry = ttk.Entry(add_row, textvariable=self.new_input_var)
-		self.new_input_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-		self.new_input_entry.bind("<Return>", lambda e: self._add_new_predefined())
-
-		add_button = ttk.Button(add_row, text="Add", command=self._add_new_predefined)
-		add_button.grid(row=0, column=1)
+		feedback_frame = ttk.LabelFrame(self.root, text="Feedback", padding=8)
+		feedback_frame.grid(row=2, column=1, sticky="ew", padx=(0, 12), pady=(6, 12))
+		feedback_frame.columnconfigure(0, weight=1)
+		
+		self.feedback_text = ScrolledText(feedback_frame, wrap="word", height=3, width=30)
+		self.feedback_text.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+		
+		feedback_buttons_frame = ttk.Frame(feedback_frame)
+		feedback_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+		feedback_buttons_frame.columnconfigure(0, weight=1)
+		
+		reset_feedback_button = ttk.Button(feedback_buttons_frame, text="Reset", command=self._reset_feedback)
+		reset_feedback_button.grid(row=0, column=1, sticky="e", padx=(16, 6))
+		
+		if self.copy_icon:
+			copy_feedback_button = tk.Button(feedback_buttons_frame, image=self.copy_icon, command=self._copy_feedback,
+											 relief="flat", cursor="hand2", bd=0, bg=self.root.cget('bg'))
+		else:
+			copy_feedback_button = ttk.Button(feedback_buttons_frame, text="📋", width=3, command=self._copy_feedback)
+		copy_feedback_button.grid(row=0, column=0, sticky="e")
+		ToolTip(copy_feedback_button, "Copy")
+		
+		self._load_feedback_template()
 
 	def _refresh_file_list(self) -> None:
 		if self.submissions_dir is None:
@@ -341,6 +435,31 @@ class PythonTesterApp:
 			self.directory_label.config(text="Directory: None", foreground="gray")
 		else:
 			self.directory_label.config(text=f"Directory: {self.submissions_dir}", foreground="black")
+	
+	def _on_window_resize(self, event: tk.Event) -> None:
+		if event.widget != self.root:
+			return
+		
+		if not hasattr(self, '_resize_scheduled') or not self._resize_scheduled:
+			self._resize_scheduled = True
+			self.root.after_idle(self._adjust_layout)
+	
+	def _adjust_layout(self) -> None:
+		self._resize_scheduled = False
+		
+		window_width = self.root.winfo_width()
+		
+		screen_width = self.root.winfo_screenwidth()
+		threshold_width = max(int(screen_width * 2 / 3), 1280)
+		
+		if window_width < threshold_width:
+			self.root.columnconfigure(0, weight=5, uniform="equal")
+			self.root.columnconfigure(1, weight=3, uniform="equal")
+		else:
+			self.root.columnconfigure(0, weight=3, uniform="")
+			self.root.columnconfigure(1, weight=2, uniform="")
+		
+		self.root.update_idletasks()
 
 	def _browse_directory(self) -> None:
 		initial_dir = BASE_DIR
@@ -393,8 +512,14 @@ class PythonTesterApp:
 			return
 
 		try:
+			python_executable = get_python_executable()
+		except FileNotFoundError as err:
+			messagebox.showerror("Python Not Found", str(err))
+			return
+
+		try:
 			self.process = subprocess.Popen(
-				[sys.executable, str(script_path)],
+				[python_executable, str(script_path)],
 				cwd=str(script_path.parent),
 				stdin=subprocess.PIPE,
 				stdout=subprocess.PIPE,
@@ -503,7 +628,11 @@ class PythonTesterApp:
 		
 		listbox_width = self.predefined_listbox.winfo_width() - 10
 		
-		self.edit_entry = tk.Entry(self.predefined_listbox)
+		base_font_size = 9
+		zoomed_font_size = int(base_font_size * self.zoom_level)
+		entry_font = ("TkDefaultFont", zoomed_font_size)
+		
+		self.edit_entry = tk.Entry(self.predefined_listbox, font=entry_font)
 		self.edit_entry.insert(0, current_value)
 		self.edit_entry.select_range(0, tk.END)
 		self.edit_entry.place(x=0, y=y, width=listbox_width, height=height)
@@ -529,6 +658,8 @@ class PythonTesterApp:
 		self.edit_entry.destroy()
 		self.edit_entry = None
 		self.edit_index = None
+		
+		self.predefined_listbox.focus_set()
 
 	def _cancel_edit(self) -> None:
 		if not self.edit_entry:
@@ -537,10 +668,87 @@ class PythonTesterApp:
 		self.edit_entry.destroy()
 		self.edit_entry = None
 		self.edit_index = None
+		
+		self.predefined_listbox.focus_set()
 
 	def _handle_space_key(self) -> None:
 		self._send_selected_predefined()
 		return "break"  
+	
+	def _check_predefined_empty(self) -> None:
+		if len(self.predefined_inputs) == 0:
+			self.predefined_inputs.append("")
+			self._save_predefined_inputs()
+			self._reload_predefined_listbox()
+			self.predefined_listbox.selection_set(0)
+	
+	def _show_hotkeys_dialog(self) -> None:
+		hotkeys_window = tk.Toplevel(self.root)
+		hotkeys_window.title("Keyboard Shortcuts")
+		hotkeys_window.geometry("550x400")
+		hotkeys_window.transient(self.root)
+		hotkeys_window.grab_set()
+		
+		main_frame = ttk.Frame(hotkeys_window, padding=20)
+		main_frame.pack(fill="both", expand=True)
+		
+		title_label = ttk.Label(main_frame, text="Preset Inputs - Keyboard Shortcuts", 
+								font=("TkDefaultFont", int(12 * self.zoom_level), "bold"))
+		title_label.pack(pady=(0, 20))
+		
+		canvas = tk.Canvas(main_frame, highlightthickness=0)
+		scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+		scrollable_frame = ttk.Frame(canvas)
+		
+		scrollable_frame.bind(
+			"<Configure>",
+			lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+		)
+		
+		canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+		canvas.configure(yscrollcommand=scrollbar.set)
+		
+		scrollable_frame.columnconfigure(0, minsize=180)
+		scrollable_frame.columnconfigure(1, weight=1)
+		
+		shortcuts = [
+			("Enter / Space", "Send selected input to terminal"),
+			("Ctrl+Enter", "Insert new row below selection"),
+			("Double Click", "Edit selected input"),
+			("Ctrl+E", "Edit selected input"),
+			("Del", "Remove selected input"),
+			("↑ / ↓ Buttons", "Move selected input up or down"),
+		]
+		
+		key_header = ttk.Label(scrollable_frame, text="Key Binding", 
+							   font=("TkDefaultFont", int(10 * self.zoom_level), "bold"))
+		key_header.grid(row=0, column=0, sticky="w", padx=(0, 20), pady=(0, 5))
+		
+		desc_header = ttk.Label(scrollable_frame, text="Action", 
+							    font=("TkDefaultFont", int(10 * self.zoom_level), "bold"))
+		desc_header.grid(row=0, column=1, sticky="w", pady=(0, 5))
+		
+		separator1 = ttk.Separator(scrollable_frame, orient="horizontal")
+		separator1.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+		
+		for idx, (key, description) in enumerate(shortcuts):
+			row_num = idx + 2
+			
+			key_label = ttk.Label(scrollable_frame, text=key, 
+								 font=("TkDefaultFont", int(9 * self.zoom_level), "bold"))
+			key_label.grid(row=row_num, column=0, sticky="w", padx=(0, 20), pady=5)
+			
+			desc_label = ttk.Label(scrollable_frame, text=description, 
+								  font=("TkDefaultFont", int(9 * self.zoom_level)))
+			desc_label.grid(row=row_num, column=1, sticky="w", pady=5)
+		
+		canvas.pack(side="left", fill="both", expand=True)
+		scrollbar.pack(side="right", fill="y")
+		
+		def on_mousewheel(event):
+			canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+		
+		hotkeys_window.bind("<MouseWheel>", on_mousewheel)
 	
 	def _send_to_process(self, text: str) -> None:
 		if not self.process or self.process.poll() is not None or not self.process.stdin:
@@ -555,16 +763,6 @@ class PythonTesterApp:
 			return
 
 		self._append_output(f"> {text}\n")
-
-	def _add_new_predefined(self) -> None:
-		new_value = self.new_input_var.get()
-		self.predefined_inputs.append(new_value)
-		self._save_predefined_inputs()
-		self._reload_predefined_listbox()
-		self.new_input_var.set("")
-		
-		last_index = len(self.predefined_inputs) - 1
-		self.predefined_listbox.see(last_index)
 
 	def _remove_selected_predefined(self) -> None:
 		selection = self.predefined_listbox.curselection()
@@ -632,7 +830,15 @@ class PythonTesterApp:
 
 	def _insert_row_below(self) -> None:
 		selection = self.predefined_listbox.curselection()
+		
 		if not selection:
+			if len(self.predefined_inputs) == 0:
+				self.predefined_inputs.append("")
+				self._save_predefined_inputs()
+				self._reload_predefined_listbox()
+				self.predefined_listbox.selection_set(0)
+				self.predefined_listbox.see(0)
+				self._edit_selected_predefined()
 			return
 		
 		index = selection[0]
@@ -649,7 +855,7 @@ class PythonTesterApp:
 	def _adjust_points(self) -> None:
 		try:
 			adjustment_str = self.points_adjust_var.get().strip()
-			adjustment = float(adjustment_str)
+			adjustment = int(float(adjustment_str))  
 			
 			self.current_points += adjustment
 			self.current_points = max(0, min(100, self.current_points))
@@ -669,7 +875,7 @@ class PythonTesterApp:
 		grade = self._calculate_grade(self.current_points)
 		color = GRADE_COLORS[grade]
 		
-		self.points_display.config(text=f"{self.current_points:.1f}", foreground=color)
+		self.points_display.config(text=f"{int(self.current_points)}", foreground=color)
 		
 		self.grade_display.config(text=grade, foreground=color)
 	
@@ -677,7 +883,55 @@ class PythonTesterApp:
 		for grade, (min_points, max_points) in GRADE_SCALE.items():
 			if min_points <= points <= max_points:
 				return grade
-		return "F" 
+		return "F"
+	
+	def _copy_to_clipboard(self, text: str) -> None:
+		self.root.clipboard_clear()
+		self.root.clipboard_append(text)
+		self.root.update()  
+	
+	def _copy_points(self) -> None:
+		text = f"{int(self.current_points)}"
+		self._copy_to_clipboard(text)
+	
+	def _copy_grade(self) -> None:
+		grade = self._calculate_grade(self.current_points)
+		self._copy_to_clipboard(grade)
+	
+	def _copy_points_and_grade(self) -> None:
+		grade = self._calculate_grade(self.current_points)
+		text = f"Points: {int(self.current_points)} | Grade: {grade}"
+		self._copy_to_clipboard(text)
+	
+	def _copy_feedback(self) -> None:
+		if self.feedback_text:
+			feedback_content = self.feedback_text.get("1.0", "end-1c")
+			self._copy_to_clipboard(feedback_content)
+
+	def _load_feedback_template(self) -> None:
+		if not self.feedback_text:
+			return
+		
+		default_template = ""
+		
+		if FEEDBACK_TEMPLATE_PATH.exists():
+			try:
+				template_content = FEEDBACK_TEMPLATE_PATH.read_text(encoding="utf-8")
+			except Exception as e:
+				template_content = default_template
+				print(f"Failed to load feedback template: {e}")
+		else:
+			template_content = default_template
+			try:
+				FEEDBACK_TEMPLATE_PATH.write_text(template_content, encoding="utf-8")
+			except Exception as e:
+				print(f"Failed to create default feedback template: {e}")
+		
+		self.feedback_text.delete("1.0", tk.END)
+		self.feedback_text.insert("1.0", template_content)
+	
+	def _reset_feedback(self) -> None:
+		self._load_feedback_template()
 
 	def _load_predefined_inputs(self) -> None:
 		if PREDEFINED_INPUTS_PATH.exists():
@@ -693,8 +947,15 @@ class PythonTesterApp:
 				self.predefined_inputs = []
 		else:
 			self.predefined_inputs = []
+		
+		if len(self.predefined_inputs) == 0:
+			self.predefined_inputs.append("")
+			self._save_predefined_inputs()
 
 		self._reload_predefined_listbox()
+		
+		if len(self.predefined_inputs) > 0:
+			self.predefined_listbox.selection_set(0)
 
 	def _import_predefined_inputs(self) -> None:
 		file_path = filedialog.askopenfilename(
@@ -744,23 +1005,26 @@ class PythonTesterApp:
 	def _open_settings(self) -> None:
 		settings_window = tk.Toplevel(self.root)
 		settings_window.title("Settings")
-		settings_window.geometry("500x400")
+		settings_window.geometry("600x500")
 		settings_window.transient(self.root)
 		settings_window.grab_set()
 		
-		general_frame = ttk.LabelFrame(settings_window, text="General", padding=10)
-		general_frame.pack(fill="both", expand=True, padx=10, pady=10)
+		notebook = ttk.Notebook(settings_window)
+		notebook.pack(fill="both", expand=True, padx=10, pady=10)
 		
-		label = ttk.Label(general_frame, text="Stored Data Files (.txt):")
-		label.pack(anchor="w", pady=(0, 5))
+		data_tab = ttk.Frame(notebook)
+		notebook.add(data_tab, text="Data Files")
 		
-		list_frame = ttk.Frame(general_frame)
-		list_frame.pack(fill="both", expand=True, pady=(0, 10))
+		label = ttk.Label(data_tab, text="Stored Data Files (.txt):")
+		label.pack(anchor="w", pady=(10, 5), padx=10)
+		
+		list_frame = ttk.Frame(data_tab)
+		list_frame.pack(fill="both", expand=True, pady=(0, 10), padx=10)
 		
 		scrollbar = ttk.Scrollbar(list_frame)
 		scrollbar.pack(side="right", fill="y")
 		
-		data_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set)
+		data_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=("TkDefaultFont", 11))
 		data_listbox.pack(side="left", fill="both", expand=True)
 		scrollbar.config(command=data_listbox.yview)
 		
@@ -768,12 +1032,13 @@ class PythonTesterApp:
 			data_listbox.delete(0, tk.END)
 			if DATA_DIR.exists():
 				for file in sorted(DATA_DIR.glob("*.txt")):
-					data_listbox.insert(tk.END, file.name)
+					if file.name != "feedback_template.txt":  
+						data_listbox.insert(tk.END, file.name)
 		
 		refresh_data_files()
 		
-		buttons_frame = ttk.Frame(general_frame)
-		buttons_frame.pack(fill="x")
+		buttons_frame = ttk.Frame(data_tab)
+		buttons_frame.pack(fill="x", padx=10, pady=(0, 10))
 		
 		def add_data_file():
 			file_path = filedialog.askopenfilename(
@@ -786,7 +1051,6 @@ class PythonTesterApp:
 					dest = DATA_DIR / source.name
 					shutil.copy(source, dest)
 					refresh_data_files()
-					# messagebox.showinfo("Success", f"Added {source.name} to data files.")
 				except Exception as e:
 					messagebox.showerror("Error", f"Failed to add file: {e}")
 		
@@ -803,7 +1067,6 @@ class PythonTesterApp:
 				try:
 					file_path.unlink()
 					refresh_data_files()
-					# messagebox.showinfo("Success", f"Removed {filename} from data files.")
 				except Exception as e:
 					messagebox.showerror("Error", f"Failed to remove file: {e}")
 		
@@ -812,6 +1075,42 @@ class PythonTesterApp:
 		
 		remove_button = ttk.Button(buttons_frame, text="Remove File", command=remove_data_file)
 		remove_button.pack(side="left")
+		
+		template_tab = ttk.Frame(notebook)
+		notebook.add(template_tab, text="Feedback Template")
+		
+		template_label = ttk.Label(template_tab, text="Edit the feedback template (will be loaded each time):")
+		template_label.pack(anchor="w", pady=(10, 5), padx=10)
+		
+		template_text_frame = ttk.Frame(template_tab)
+		template_text_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+		
+		template_text = ScrolledText(template_text_frame, wrap="word", height=15, font=("TkDefaultFont", 11))
+		template_text.pack(fill="both", expand=True)
+		
+		default_template = " "
+		if FEEDBACK_TEMPLATE_PATH.exists():
+			try:
+				template_content = FEEDBACK_TEMPLATE_PATH.read_text(encoding="utf-8")
+			except Exception as e:
+				template_content = default_template
+		else:
+			template_content = default_template
+		
+		template_text.insert("1.0", template_content)
+		
+		def save_template():
+			try:
+				new_template = template_text.get("1.0", "end-1c")
+				FEEDBACK_TEMPLATE_PATH.write_text(new_template, encoding="utf-8")
+				messagebox.showinfo("Success", "Feedback template saved successfully!")
+				if self.feedback_text:
+					self._load_feedback_template()
+			except Exception as e:
+				messagebox.showerror("Error", f"Failed to save template: {e}")
+		
+		save_button = ttk.Button(template_tab, text="Save Template", command=save_template)
+		save_button.pack(pady=10)
 		
 		close_button = ttk.Button(settings_window, text="Close", command=settings_window.destroy)
 		close_button.pack(pady=10)
@@ -876,7 +1175,9 @@ class PythonTesterApp:
 		viewer = tk.Toplevel(self.root)
 		viewer.title(f"Code Viewer - {selected_file}")
 		viewer.geometry("800x600")
-		viewer.configure(bg="#1E1E1E")  
+		viewer.configure(bg="#1E1E1E")
+		
+		viewer.zoom_level = 1.0
 		
 		frame = tk.Frame(viewer, bg="#1E1E1E")
 		frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -932,6 +1233,36 @@ class PythonTesterApp:
 		
 		self._apply_python_syntax_highlighting(text_widget, code_content)
 		text_widget.config(state="disabled")
+		
+		def apply_code_viewer_zoom():
+			base_font_size = 10
+			new_font_size = int(base_font_size * viewer.zoom_level)
+			text_widget.configure(font=("Consolas", new_font_size))
+			line_numbers.configure(font=("Consolas", new_font_size))
+		
+		def zoom_in_code_viewer():
+			viewer.zoom_level = min(viewer.zoom_level + 0.1, 3.0)
+			apply_code_viewer_zoom()
+		
+		def zoom_out_code_viewer():
+			viewer.zoom_level = max(viewer.zoom_level - 0.1, 0.5)
+			apply_code_viewer_zoom()
+		
+		def reset_zoom_code_viewer():
+			viewer.zoom_level = 1.0
+			apply_code_viewer_zoom()
+		
+		def handle_code_viewer_mouse_zoom(event):
+			if event.delta > 0:
+				zoom_in_code_viewer()
+			else:
+				zoom_out_code_viewer()
+		
+		viewer.bind("<Control-MouseWheel>", handle_code_viewer_mouse_zoom)
+		viewer.bind("<Control-plus>", lambda e: zoom_in_code_viewer())
+		viewer.bind("<Control-equal>", lambda e: zoom_in_code_viewer())
+		viewer.bind("<Control-minus>", lambda e: zoom_out_code_viewer())
+		viewer.bind("<Control-Key-0>", lambda e: reset_zoom_code_viewer())
 	
 	def _apply_python_syntax_highlighting(self, text_widget: tk.Text, code: str) -> None:
 		
@@ -1021,6 +1352,9 @@ class PythonTesterApp:
 		viewer.title("Data Files Viewer (Live)")
 		viewer.geometry("900x700")
 		
+		viewer.zoom_level = 1.0
+		viewer.text_widgets = []  
+		
 		main_canvas = tk.Canvas(viewer)
 		main_scrollbar = ttk.Scrollbar(viewer, orient="vertical", command=main_canvas.yview)
 		scrollable_frame = ttk.Frame(main_canvas)
@@ -1037,7 +1371,8 @@ class PythonTesterApp:
 		main_scrollbar.pack(side="right", fill="y")
 		
 		def on_mousewheel(event):
-			main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+			if not (event.state & 0x0004):  
+				main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 		
 		viewer.bind("<MouseWheel>", on_mousewheel)
 		
@@ -1050,6 +1385,40 @@ class PythonTesterApp:
 			text_widget = self._create_collapsible_csv_viewer(scrollable_frame, file_path, file_idx, rainbow_colors)
 			if text_widget:
 				file_viewers[str(file_path)] = text_widget
+				viewer.text_widgets.append(text_widget)  
+		
+		def apply_files_viewer_zoom():
+			base_font_size = 11
+			new_font_size = int(base_font_size * viewer.zoom_level)
+			for text_widget in viewer.text_widgets:
+				if text_widget.winfo_exists():
+					text_widget.configure(font=("Consolas", new_font_size, "bold"))
+					for i in range(len(rainbow_colors)):
+						text_widget.tag_config(f"col{i}", foreground=rainbow_colors[i], font=("Consolas", new_font_size, "bold"))
+		
+		def zoom_in_files_viewer():
+			viewer.zoom_level = min(viewer.zoom_level + 0.1, 3.0)
+			apply_files_viewer_zoom()
+		
+		def zoom_out_files_viewer():
+			viewer.zoom_level = max(viewer.zoom_level - 0.1, 0.5)
+			apply_files_viewer_zoom()
+		
+		def reset_zoom_files_viewer():
+			viewer.zoom_level = 1.0
+			apply_files_viewer_zoom()
+		
+		def handle_files_viewer_mouse_zoom(event):
+			if event.delta > 0:
+				zoom_in_files_viewer()
+			else:
+				zoom_out_files_viewer()
+		
+		viewer.bind("<Control-MouseWheel>", handle_files_viewer_mouse_zoom)
+		viewer.bind("<Control-plus>", lambda e: zoom_in_files_viewer())
+		viewer.bind("<Control-equal>", lambda e: zoom_in_files_viewer())
+		viewer.bind("<Control-minus>", lambda e: zoom_out_files_viewer())
+		viewer.bind("<Control-Key-0>", lambda e: reset_zoom_files_viewer())
 		
 		class FileChangeHandler(FileSystemEventHandler):
 			def __init__(self, viewer_window, file_viewers_dict, colors):
@@ -1242,10 +1611,12 @@ class PythonTesterApp:
 		text_font_size = int(10 * self.zoom_level)
 		self.output_text.configure(font=("TkFixedFont", text_font_size))
 		
+		if self.feedback_text:
+			self.feedback_text.configure(font=("TkDefaultFont", new_font_size))
+		
 		entry_font = ("TkDefaultFont", new_font_size)
 		self.file_combo.configure(font=entry_font)
 		self.manual_entry.configure(font=entry_font)
-		self.new_input_entry.configure(font=entry_font)
 		self.points_adjust_entry.configure(font=entry_font)
 		
 		listbox_font = ("TkDefaultFont", new_font_size)
@@ -1287,7 +1658,7 @@ class PythonTesterApp:
 					if "last_opened_file" in config:
 						self.last_opened_file = config["last_opened_file"]
 					if "current_points" in config:
-						self.current_points = max(0, min(100, float(config["current_points"])))
+						self.current_points = max(0, min(100, int(float(config["current_points"]))))
 					if "last_file_for_points" in config:
 						self.last_file_for_points = config["last_file_for_points"]
 			except (json.JSONDecodeError, ValueError, KeyError):
@@ -1321,6 +1692,10 @@ def initialize_bundled_resources():
 	bundled_inputs = get_resource_path("predefined_inputs.json")
 	if bundled_inputs.exists() and not PREDEFINED_INPUTS_PATH.exists():
 		shutil.copy(bundled_inputs, PREDEFINED_INPUTS_PATH)
+	
+	bundled_feedback = get_resource_path("feedback_template.txt")
+	if bundled_feedback.exists() and not FEEDBACK_TEMPLATE_PATH.exists():
+		shutil.copy(bundled_feedback, FEEDBACK_TEMPLATE_PATH)
 
 def main() -> None:
 	initialize_bundled_resources()

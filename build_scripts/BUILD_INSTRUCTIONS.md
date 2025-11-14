@@ -2,24 +2,24 @@
 
 ## Quick Build
 
-Run the build script in PowerShell:
+Run the build script from the project root in PowerShell:
 
 ```powershell
-.\build_exe.ps1
+.\build_scripts\build_exe.ps1
 ```
 
 The executable will be created at: `dist\ProjectTester.exe`
 
 ## Manual Build
 
-If you prefer to build manually:
+If you prefer to build manually from the project root:
 
 ```powershell
 # Activate virtual environment
 .\.venv\Scripts\Activate.ps1
 
 # Build with PyInstaller
-python -m PyInstaller ProjectTester.spec --clean
+python -m PyInstaller build_scripts\ProjectTester.spec --clean
 ```
 
 ## About the Executable
