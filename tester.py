@@ -22,6 +22,24 @@ DATA_DIR = BASE_DIR / "data"
 PREDEFINED_INPUTS_PATH = BASE_DIR / "predefined_inputs.json"
 CONFIG_PATH = BASE_DIR / "config.json"
 
+GRADE_SCALE = {
+    "5": (90, 100),
+    "4": (80, 89),
+    "3": (70, 79),
+    "2": (60, 69),
+    "1": (50, 59),
+    "F": (0, 49),
+}
+
+GRADE_COLORS = {
+    "5": "#00a526", 
+    "4": "#689e03", 
+    "3": "#b88a00",  
+    "2": "#fd7e14", 
+    "1": "#a70313",  
+    "F": "#ff0000", 
+}
+
 class PythonTesterApp:
 	def __init__(self, root: tk.Tk) -> None:
 		self.root = root
@@ -35,6 +53,8 @@ class PythonTesterApp:
 		self.predefined_inputs: list[str] = []
 		self.zoom_level = 1.0
 		self.submissions_dir: Path | None = None
+		self.current_points = 100
+		self.last_file_for_points = None
 
 		self._load_config()
 		self._create_menu()
@@ -44,6 +64,7 @@ class PythonTesterApp:
 		self._poll_output_queue()
 		self._setup_zoom_bindings()
 		self._apply_zoom()  
+		self._update_points_display() 
 		self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
 	def _create_menu(self) -> None:
@@ -68,10 +89,11 @@ class PythonTesterApp:
 	def _build_layout(self) -> None:
 		self.root.columnconfigure(0, weight=3)
 		self.root.columnconfigure(1, weight=2)
-		self.root.rowconfigure(0, weight=1)
+		self.root.rowconfigure(0, weight=0)  # Point tracker row
+		self.root.rowconfigure(1, weight=1)  # Main content row
 
 		main_frame = ttk.Frame(self.root, padding=12)
-		main_frame.grid(row=0, column=0, sticky="nsew")
+		main_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
 		main_frame.columnconfigure(0, weight=1)
 		main_frame.rowconfigure(3, weight=1)
 
@@ -147,8 +169,46 @@ class PythonTesterApp:
 		send_manual_button = ttk.Button(manual_entry_row, text="Send", command=self._send_manual_input)
 		send_manual_button.grid(row=0, column=1)
 
+		points_frame = ttk.LabelFrame(self.root, text="Point Tracker", padding=8)
+		points_frame.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=(12, 6))
+		points_frame.columnconfigure(1, weight=1)
+
+		ttk.Label(points_frame, text="Current Points:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+		
+		points_grade_frame = ttk.Frame(points_frame)
+		points_grade_frame.grid(row=0, column=1, sticky="ew")
+		points_grade_frame.columnconfigure(1, weight=1)  
+		
+		self.points_display = ttk.Label(points_grade_frame, text="100.0", font=("TkDefaultFont", 8, "bold"), foreground="green")
+		self.points_display.grid(row=0, column=0, sticky="w")
+		
+		grade_container = ttk.Frame(points_grade_frame)
+		grade_container.grid(row=0, column=1, sticky="e", padx=(8, 0))
+		
+		ttk.Label(grade_container, text="Grade: ").grid(row=0, column=0, sticky="e")
+		
+		self.grade_display = ttk.Label(grade_container, text="5", font=("TkDefaultFont", 8, "bold"), foreground="green")
+		self.grade_display.grid(row=0, column=1, sticky="e")
+
+		ttk.Label(points_frame, text="Adjust Points:").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(6, 0))
+		
+		adjust_row = ttk.Frame(points_frame)
+		adjust_row.grid(row=1, column=1, sticky="ew", pady=(6, 0))
+		adjust_row.columnconfigure(0, weight=1)
+
+		self.points_adjust_var = tk.StringVar(value="-4")
+		self.points_adjust_entry = ttk.Entry(adjust_row, textvariable=self.points_adjust_var, width=8)
+		self.points_adjust_entry.grid(row=0, column=0, sticky="w", padx=(0, 6))
+		self.points_adjust_entry.bind("<Return>", lambda e: self._adjust_points())
+
+		apply_button = ttk.Button(adjust_row, text="Apply", command=self._adjust_points, width=8)
+		apply_button.grid(row=0, column=1)
+
+		reset_button = ttk.Button(adjust_row, text="Reset", command=self._reset_points, width=8)
+		reset_button.grid(row=0, column=2, padx=(6, 0))
+
 		sidebar = ttk.LabelFrame(self.root, text="Predefined Inputs", padding=12)
-		sidebar.grid(row=0, column=1, sticky="nsew", padx=(0, 12), pady=12)
+		sidebar.grid(row=1, column=1, sticky="nsew", padx=(0, 12), pady=(6, 12))
 		sidebar.columnconfigure(0, weight=1)
 		sidebar.rowconfigure(1, weight=1)
 
@@ -271,6 +331,11 @@ class PythonTesterApp:
 		if not selected_file:
 			messagebox.showwarning("No File Selected", "Please choose a submission file to run.")
 			return
+
+		if self.last_file_for_points != selected_file:
+			self.current_points = 100
+			self.last_file_for_points = selected_file
+			self._update_points_display()
 
 		self.last_opened_file = selected_file
 		self._save_config()
@@ -540,6 +605,41 @@ class PythonTesterApp:
 		self.predefined_listbox.see(index + 1)
 		
 		self._edit_selected_predefined()
+
+	def _adjust_points(self) -> None:
+		try:
+			adjustment_str = self.points_adjust_var.get().strip()
+			adjustment = float(adjustment_str)
+			
+			self.current_points += adjustment
+			self.current_points = max(0, min(100, self.current_points))
+			
+			self._update_points_display()
+			self._save_config()
+		except ValueError:
+			messagebox.showerror("Invalid Input", "Please enter a valid number (e.g., -4, +5, or 3)")
+
+	def _reset_points(self) -> None:
+		"""Reset points to 100"""
+		self.current_points = 100
+		self.points_adjust_var.set("-4")
+		self._update_points_display()
+		self._save_config()
+
+	def _update_points_display(self) -> None:
+		grade = self._calculate_grade(self.current_points)
+		color = GRADE_COLORS[grade]
+		
+		self.points_display.config(text=f"{self.current_points:.1f}", foreground=color)
+		
+		self.grade_display.config(text=grade, foreground=color)
+	
+	def _calculate_grade(self, points: float) -> str:
+		"""Calculate the grade based on points."""
+		for grade, (min_points, max_points) in GRADE_SCALE.items():
+			if min_points <= points <= max_points:
+				return grade
+		return "F" 
 
 	def _load_predefined_inputs(self) -> None:
 		if PREDEFINED_INPUTS_PATH.exists():
@@ -1109,9 +1209,14 @@ class PythonTesterApp:
 		self.file_combo.configure(font=entry_font)
 		self.manual_entry.configure(font=entry_font)
 		self.new_input_entry.configure(font=entry_font)
+		self.points_adjust_entry.configure(font=entry_font)
 		
 		listbox_font = ("TkDefaultFont", new_font_size)
 		self.predefined_listbox.configure(font=listbox_font)
+		
+		points_font_size = int(10 * self.zoom_level)
+		self.points_display.configure(font=("TkDefaultFont", points_font_size, "bold"))
+		self.grade_display.configure(font=("TkDefaultFont", points_font_size, "bold"))
 		
 		button_font = ("TkDefaultFont", new_font_size)
 		self.run_button.configure(font=button_font)
@@ -1141,12 +1246,18 @@ class PythonTesterApp:
 							self.submissions_dir = loaded_dir
 					if "last_opened_file" in config:
 						self.last_opened_file = config["last_opened_file"]
+					if "current_points" in config:
+						self.current_points = max(0, min(100, float(config["current_points"])))
+					if "last_file_for_points" in config:
+						self.last_file_for_points = config["last_file_for_points"]
 			except (json.JSONDecodeError, ValueError, KeyError):
 				self.zoom_level = 1.0
 
 	def _save_config(self) -> None:
 		config = {
-			"zoom_level": self.zoom_level
+			"zoom_level": self.zoom_level,
+			"current_points": self.current_points,
+			"last_file_for_points": self.last_file_for_points
 		}
 		if self.submissions_dir is not None:
 			config["submissions_dir"] = str(self.submissions_dir)
