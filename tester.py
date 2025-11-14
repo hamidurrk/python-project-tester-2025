@@ -518,6 +518,11 @@ class PythonTesterApp:
 			return
 
 		try:
+			# hide the console window on windows
+			creation_flags = 0
+			if sys.platform == 'win32':
+				creation_flags = subprocess.CREATE_NO_WINDOW
+			
 			self.process = subprocess.Popen(
 				[python_executable, str(script_path)],
 				cwd=str(script_path.parent),
@@ -526,6 +531,7 @@ class PythonTesterApp:
 				stderr=subprocess.STDOUT,
 				text=True,
 				bufsize=1,
+				creationflags=creation_flags,
 			)
 		except OSError as err:
 			messagebox.showerror("Execution Error", f"Failed to start process: {err}")
