@@ -2,7 +2,7 @@
 
 A Python submission testing application with an integrated terminal, syntax highlighting, real-time file monitoring, and point tracking.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.13+-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
@@ -74,6 +74,8 @@ A Python submission testing application with an integrated terminal, syntax high
 
 ## Installation
 
+Currently, pre-built executables are available only for `Windows`. MacOS builds can be created from source or used from development. See [BUILD_INSTRUCTIONS_macOS.md](build_scripts/BUILD_INSTRUCTIONS_macOS.md) for details.
+
 ### Quick Start (Windows Executable)
 
 1. **Download** the latest `Project Tester.exe` from releases
@@ -85,7 +87,7 @@ A Python submission testing application with an integrated terminal, syntax high
 
 **No Python installation required!**
 
-### From Source (Development)
+### From Source (Development on Windows)
 
 #### Prerequisites
 - Python 3.13+ (or 3.10+)
@@ -182,17 +184,17 @@ A Python submission testing application with an integrated terminal, syntax high
 
 2. **Run the build script**
    ```powershell
-   .\build_exe.ps1
+   .\build_scripts\build_exe.ps1
    ```
 
    Or manually:
    ```powershell
-   python -m PyInstaller ProjectTester.spec --clean
+   python -m PyInstaller ProjectTester.spec --clean --onefile --add-data "assets/icon.png;assets" --add-data "data;data" --add-data "config.json;." --add-data "predefined_inputs.json;."
    ```
 
 3. **Find the executable**
    ```
-   dist\ProjectTester.exe
+   dist\Project-Tester.exe
    ```
 
 ### Build Configuration
