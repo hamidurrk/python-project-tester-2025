@@ -145,7 +145,9 @@ class PythonTesterApp:
 		self.last_file_for_points = None
 		self.feedback_text: ScrolledText | None = None  
 		self._resize_scheduled = False
-		self.feedback_collapsed = True  
+		self.feedback_collapsed = True
+		self.code_viewer_zoom = 1.5  # Default zoom for code viewer
+		self.files_viewer_zoom = 1.4  # Default zoom for data files viewer
 
 		self._load_config()
 		self._create_menu()
@@ -1234,13 +1236,64 @@ class PythonTesterApp:
 		
 		viewer = tk.Toplevel(self.root)
 		viewer.title(f"Code Viewer - {selected_file}")
-		viewer.geometry("800x600")
+		
+		screen_width = viewer.winfo_screenwidth()
+		screen_height = viewer.winfo_screenheight()
+		
+		window_width = int(screen_width * 1 / 2)
+		window_height = screen_height
+		
+		viewer.geometry(f"{window_width}x{window_height}+0+0")
 		viewer.configure(bg="#1E1E1E")
 		
-		viewer.zoom_level = 1.0
+		viewer.zoom_level = self.code_viewer_zoom
+		
+		open_count = code_content.count('open(')
+		close_count = code_content.count('.close(')
+		is_balanced = open_count == close_count
+		counter_bg = "#2D5016" if is_balanced else "#5A1A1A"  
+		counter_fg = "#90EE90" if is_balanced else "#FF6B6B"  
+		
+		top_bar = tk.Frame(viewer, bg="#1E1E1E")
+		top_bar.pack(fill="x", padx=5, pady=(5, 0))
+		
+		search_frame = tk.Frame(top_bar, bg="#1E1E1E")
+		search_frame.pack(side="left", padx=5)
+		
+		initial_search_font_size = int(9 * viewer.zoom_level)
+		
+		search_label = tk.Label(search_frame, text="Search:", bg="#1E1E1E", fg="#D4D4D4", font=("Consolas", initial_search_font_size))
+		search_label.pack(side="left", padx=(0, 5))
+		
+		search_entry = tk.Entry(search_frame, bg="#3C3C3C", fg="#D4D4D4", insertbackground="#FFFFFF", 
+								font=("Consolas", initial_search_font_size), width=20, relief="solid", borderwidth=1)
+		search_entry.pack(side="left", padx=(0, 5))
+		
+		search_result_label = tk.Label(search_frame, text="0/0", bg="#1E1E1E", fg="#858585", 
+								   font=("Consolas", initial_search_font_size), width=8)
+		search_result_label.pack(side="left", padx=(0, 5))
+		
+		prev_button = tk.Button(search_frame, text="◀", bg="#3C3C3C", fg="#D4D4D4", 
+								font=("Consolas", initial_search_font_size), width=3, relief="solid", borderwidth=1)
+		prev_button.pack(side="left", padx=(0, 2))
+		
+		next_button = tk.Button(search_frame, text="▶", bg="#3C3C3C", fg="#D4D4D4", 
+								font=("Consolas", initial_search_font_size), width=3, relief="solid", borderwidth=1)
+		next_button.pack(side="left")
+		
+		counter_label = tk.Label(top_bar, 
+								 text=f"open(): {open_count} | close(): {close_count}",
+								 bg=counter_bg,
+								 fg=counter_fg,
+								 font=("Consolas", int(10 * viewer.zoom_level), "bold"),
+								 padx=10,
+								 pady=5,
+								 relief="solid",
+								 borderwidth=1)
+		counter_label.pack(side="right", padx=5)
 		
 		frame = tk.Frame(viewer, bg="#1E1E1E")
-		frame.pack(fill="both", expand=True, padx=5, pady=5)
+		frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
 		
 		text_frame = tk.Frame(frame, bg="#1E1E1E")
 		text_frame.pack(fill="both", expand=True)
@@ -1251,9 +1304,11 @@ class PythonTesterApp:
 		h_scrollbar = tk.Scrollbar(frame, orient="horizontal", bg="#252526", troughcolor="#1E1E1E")
 		h_scrollbar.pack(side="bottom", fill="x")
 		
+		initial_font_size = int(10 * viewer.zoom_level)
+		
 		line_numbers = tk.Text(text_frame, wrap="none",
 							   width=5,
-							   font=("Consolas", 10),
+							   font=("Consolas", initial_font_size),
 							   bg="#1E1E1E",
 							   fg="#858585",  
 							   state="disabled",
@@ -1266,7 +1321,7 @@ class PythonTesterApp:
 		text_widget = tk.Text(text_frame, wrap="none", 
 							  yscrollcommand=v_scrollbar.set,
 							  xscrollcommand=h_scrollbar.set,
-							  font=("Consolas", 10),
+							  font=("Consolas", initial_font_size),
 							  bg="#1E1E1E",
 							  fg="#D4D4D4",
 							  insertbackground="#FFFFFF",
@@ -1294,11 +1349,89 @@ class PythonTesterApp:
 		self._apply_python_syntax_highlighting(text_widget, code_content)
 		text_widget.config(state="disabled")
 		
+		viewer.search_matches = []
+		viewer.current_match = -1
+		text_widget.tag_config("search_highlight", background="#FFA500", foreground="#000000")
+		text_widget.tag_config("current_search_highlight", background="#FF4500", foreground="#FFFFFF")
+		
+		def perform_search(event=None):
+			search_term = search_entry.get()
+			
+			text_widget.tag_remove("search_highlight", "1.0", tk.END)
+			text_widget.tag_remove("current_search_highlight", "1.0", tk.END)
+			viewer.search_matches = []
+			viewer.current_match = -1
+			
+			if not search_term:
+				search_result_label.config(text="0/0")
+				return
+			
+			start_pos = "1.0"
+			search_term_lower = search_term.lower()
+			
+			while True:
+				pos = text_widget.search(search_term_lower, start_pos, stopindex=tk.END, nocase=True)
+				if not pos:
+					break
+				
+				end_pos = f"{pos}+{len(search_term)}c"
+				viewer.search_matches.append(pos)
+				text_widget.tag_add("search_highlight", pos, end_pos)
+				start_pos = end_pos
+			
+			total_matches = len(viewer.search_matches)
+			if total_matches > 0:
+				viewer.current_match = 0
+				highlight_current_match()
+				search_result_label.config(text=f"1/{total_matches}")
+			else:
+				search_result_label.config(text="0/0")
+		
+		def highlight_current_match():
+			if viewer.current_match >= 0 and viewer.current_match < len(viewer.search_matches):
+				text_widget.tag_remove("current_search_highlight", "1.0", tk.END)
+				
+				pos = viewer.search_matches[viewer.current_match]
+				search_term = search_entry.get()
+				end_pos = f"{pos}+{len(search_term)}c"
+				text_widget.tag_add("current_search_highlight", pos, end_pos)
+				
+				text_widget.see(pos)
+				
+				search_result_label.config(text=f"{viewer.current_match + 1}/{len(viewer.search_matches)}")
+		
+		def next_match():
+			if len(viewer.search_matches) > 0:
+				viewer.current_match = (viewer.current_match + 1) % len(viewer.search_matches)
+				highlight_current_match()
+		
+		def prev_match():
+			if len(viewer.search_matches) > 0:
+				viewer.current_match = (viewer.current_match - 1) % len(viewer.search_matches)
+				highlight_current_match()
+		
+		search_entry.bind("<Return>", perform_search)
+		search_entry.bind("<KeyRelease>", perform_search)
+		next_button.config(command=next_match)
+		prev_button.config(command=prev_match)
+		
 		def apply_code_viewer_zoom():
 			base_font_size = 10
 			new_font_size = int(base_font_size * viewer.zoom_level)
+			search_font_size = int(9 * viewer.zoom_level)
 			text_widget.configure(font=("Consolas", new_font_size))
 			line_numbers.configure(font=("Consolas", new_font_size))
+			counter_label.configure(font=("Consolas", new_font_size, "bold"))
+			search_label.configure(font=("Consolas", search_font_size))
+			search_entry.configure(font=("Consolas", search_font_size))
+			search_result_label.configure(font=("Consolas", search_font_size))
+			prev_button.configure(font=("Consolas", search_font_size))
+			next_button.configure(font=("Consolas", search_font_size))
+			text_widget.config(state="normal")
+			self._apply_python_syntax_highlighting(text_widget, code_content)
+			text_widget.config(state="disabled")
+			self.code_viewer_zoom = viewer.zoom_level
+			self._save_config()
 		
 		def zoom_in_code_viewer():
 			viewer.zoom_level = min(viewer.zoom_level + 0.1, 3.0)
@@ -1309,7 +1442,7 @@ class PythonTesterApp:
 			apply_code_viewer_zoom()
 		
 		def reset_zoom_code_viewer():
-			viewer.zoom_level = 1.0
+			viewer.zoom_level = 1.2
 			apply_code_viewer_zoom()
 		
 		def handle_code_viewer_mouse_zoom(event):
@@ -1325,7 +1458,6 @@ class PythonTesterApp:
 		viewer.bind("<Control-Key-0>", lambda e: reset_zoom_code_viewer())
 	
 	def _apply_python_syntax_highlighting(self, text_widget: tk.Text, code: str) -> None:
-		
 		color_scheme = {
 			Token.Keyword: "#C586C0",              
 			Token.Keyword.Constant: "#569CD6",     
@@ -1349,10 +1481,22 @@ class PythonTesterApp:
 		text_widget.tag_config("highlight_open", background="#1F303A")   
 		text_widget.tag_config("highlight_close", background="#1F3A1F")  
 		
+		current_font = text_widget.cget("font")
+		if isinstance(current_font, str):
+			parts = current_font.split()
+			try:
+				font_size = int(parts[-1])
+			except (ValueError, IndexError):
+				font_size = 10
+		elif isinstance(current_font, tuple):
+			font_size = current_font[1] if len(current_font) > 1 else 10
+		else:
+			font_size = 10
+		
 		for token_type, color in color_scheme.items():
 			tag_name = str(token_type)
 			if token_type in (Token.Comment, Token.Comment.Single, Token.Comment.Multiline):
-				text_widget.tag_config(tag_name, foreground=color, font=("Consolas", 10, "italic"))
+				text_widget.tag_config(tag_name, foreground=color, font=("Consolas", font_size, "italic"))
 			else:
 				text_widget.tag_config(tag_name, foreground=color)
 		
@@ -1410,10 +1554,43 @@ class PythonTesterApp:
 		
 		viewer = tk.Toplevel(self.root)
 		viewer.title("Data Files Viewer (Live)")
-		viewer.geometry("900x700")
 		
-		viewer.zoom_level = 1.0
-		viewer.text_widgets = []  
+		screen_width = viewer.winfo_screenwidth()
+		screen_height = viewer.winfo_screenheight()
+		
+		window_width = int(screen_width * 2 / 5)
+		window_height = screen_height
+		
+		viewer.geometry(f"{window_width}x{window_height}+0+0")
+		
+		viewer.zoom_level = self.files_viewer_zoom
+		viewer.text_widgets = []
+		viewer.extra_line_positions = []  
+		viewer.current_extra_line = -1
+		
+		top_nav_bar = tk.Frame(viewer, bg="#1E1E1E")
+		top_nav_bar.pack(fill="x", padx=5, pady=(5, 0))
+		
+		nav_frame = tk.Frame(top_nav_bar, bg="#1E1E1E")
+		nav_frame.pack(side="right", padx=5)
+		
+		initial_nav_font_size = int(9 * viewer.zoom_level)
+		
+		nav_label = tk.Label(nav_frame, text="Changed/New Lines:", bg="#1E1E1E", fg="#D4D4D4", 
+							 font=("Consolas", initial_nav_font_size, "bold"))
+		nav_label.pack(side="left", padx=(0, 5))
+		
+		extra_line_counter = tk.Label(nav_frame, text="0/0", bg="#1E1E1E", fg="#FF8C00", 
+								  font=("Consolas", initial_nav_font_size, "bold"), width=8)
+		extra_line_counter.pack(side="left", padx=(0, 5))
+		
+		prev_extra_button = tk.Button(nav_frame, text="◀", bg="#3C3C3C", fg="#D4D4D4", 
+									  font=("Consolas", initial_nav_font_size), width=3, relief="solid", borderwidth=1)
+		prev_extra_button.pack(side="left", padx=(0, 2))
+		
+		next_extra_button = tk.Button(nav_frame, text="▶", bg="#3C3C3C", fg="#D4D4D4", 
+									  font=("Consolas", initial_nav_font_size), width=3, relief="solid", borderwidth=1)
+		next_extra_button.pack(side="left")
 		
 		main_canvas = tk.Canvas(viewer)
 		main_scrollbar = ttk.Scrollbar(viewer, orient="vertical", command=main_canvas.yview)
@@ -1442,19 +1619,74 @@ class PythonTesterApp:
 		file_viewers = {}
 		
 		for file_idx, file_path in enumerate(data_files_to_display):
-			text_widget = self._create_collapsible_csv_viewer(scrollable_frame, file_path, file_idx, rainbow_colors)
+			base_file_path = DATA_DIR / file_path.name
+			text_widget = self._create_collapsible_csv_viewer(scrollable_frame, file_path, file_idx, rainbow_colors, base_file_path, viewer)
 			if text_widget:
 				file_viewers[str(file_path)] = text_widget
-				viewer.text_widgets.append(text_widget)  
+				viewer.text_widgets.append(text_widget)
+		
+		total_extra_lines = len(viewer.extra_line_positions)
+		if total_extra_lines > 0:
+			extra_line_counter.config(text=f"0/{total_extra_lines}")
+		else:
+			extra_line_counter.config(text="0/0")
+		
+		def navigate_to_extra_line():
+			if viewer.current_extra_line >= 0 and viewer.current_extra_line < len(viewer.extra_line_positions):
+				for text_widget in viewer.text_widgets:
+					if text_widget.winfo_exists():
+						text_widget.tag_remove("current_extra_line", "1.0", tk.END)
+				
+				text_widget, line_num = viewer.extra_line_positions[viewer.current_extra_line]
+				
+				text_widget.tag_add("current_extra_line", f"{line_num}.0", f"{line_num}.end+1c")
+				text_widget.tag_raise("current_extra_line")
+				
+				text_widget.see(f"{line_num}.0")
+				
+				text_widget.update_idletasks()
+				bbox = text_widget.bbox(f"{line_num}.0")
+				if bbox:
+					widget_y = text_widget.winfo_y()
+					scroll_y = widget_y + bbox[1]
+					canvas_height = main_canvas.winfo_height()
+					scrollregion = main_canvas.cget("scrollregion").split()
+					if scrollregion:
+						total_height = float(scrollregion[3])
+						if total_height > 0:
+							fraction = scroll_y / total_height
+							main_canvas.yview_moveto(max(0, min(1, fraction - 0.005)))
+				
+				extra_line_counter.config(text=f"{viewer.current_extra_line + 1}/{len(viewer.extra_line_positions)}")
+		
+		def next_extra_line():
+			if len(viewer.extra_line_positions) > 0:
+				viewer.current_extra_line = (viewer.current_extra_line + 1) % len(viewer.extra_line_positions)
+				navigate_to_extra_line()
+		
+		def prev_extra_line():
+			if len(viewer.extra_line_positions) > 0:
+				viewer.current_extra_line = (viewer.current_extra_line - 1) % len(viewer.extra_line_positions)
+				navigate_to_extra_line()
+		
+		next_extra_button.config(command=next_extra_line)
+		prev_extra_button.config(command=prev_extra_line)
 		
 		def apply_files_viewer_zoom():
 			base_font_size = 11
 			new_font_size = int(base_font_size * viewer.zoom_level)
+			nav_font_size = int(9 * viewer.zoom_level)
 			for text_widget in viewer.text_widgets:
 				if text_widget.winfo_exists():
 					text_widget.configure(font=("Consolas", new_font_size, "bold"))
 					for i in range(len(rainbow_colors)):
 						text_widget.tag_config(f"col{i}", foreground=rainbow_colors[i], font=("Consolas", new_font_size, "bold"))
+			nav_label.configure(font=("Consolas", nav_font_size, "bold"))
+			extra_line_counter.configure(font=("Consolas", nav_font_size, "bold"))
+			prev_extra_button.configure(font=("Consolas", nav_font_size))
+			next_extra_button.configure(font=("Consolas", nav_font_size))
+			self.files_viewer_zoom = viewer.zoom_level
+			self._save_config()
 		
 		def zoom_in_files_viewer():
 			viewer.zoom_level = min(viewer.zoom_level + 0.1, 3.0)
@@ -1465,7 +1697,7 @@ class PythonTesterApp:
 			apply_files_viewer_zoom()
 		
 		def reset_zoom_files_viewer():
-			viewer.zoom_level = 1.0
+			viewer.zoom_level = 1.2
 			apply_files_viewer_zoom()
 		
 		def handle_files_viewer_mouse_zoom(event):
@@ -1481,10 +1713,11 @@ class PythonTesterApp:
 		viewer.bind("<Control-Key-0>", lambda e: reset_zoom_files_viewer())
 		
 		class FileChangeHandler(FileSystemEventHandler):
-			def __init__(self, viewer_window, file_viewers_dict, colors):
+			def __init__(self, viewer_window, file_viewers_dict, colors, counter_label):
 				self.viewer_window = viewer_window
 				self.file_viewers = file_viewers_dict
 				self.colors = colors
+				self.counter_label = counter_label
 			
 			def on_modified(self, event):
 				if event.is_directory:
@@ -1506,13 +1739,36 @@ class PythonTesterApp:
 					content = file_path.read_text(encoding="utf-8")
 					lines = content.strip().split('\n')
 					
+					base_file_path = DATA_DIR / file_path.name
+					base_lines = []
+					if base_file_path.exists():
+						try:
+							base_content = base_file_path.read_text(encoding="utf-8")
+							base_lines = base_content.strip().split('\n')
+						except Exception:
+							pass
+					
 					first_line = lines[0] if lines else ""
 					delimiter = ',' if ',' in first_line else '\t'
 					
 					text_widget.config(state="normal")
 					text_widget.delete("1.0", tk.END)
 					
-					for line in lines:
+					self.viewer_window.extra_line_positions = [
+						(widget, line) for widget, line in self.viewer_window.extra_line_positions 
+						if widget != text_widget
+					]
+					
+					for line_idx, line in enumerate(lines):
+						line_num = line_idx + 1
+						
+						is_extra = line_idx >= len(base_lines)
+						is_modified = False
+						
+						if not is_extra and line_idx < len(base_lines):
+							if line.strip() != base_lines[line_idx].strip():
+								is_modified = True
+						
 						columns = line.split(delimiter)
 						for col_idx, column in enumerate(columns):
 							color_idx = col_idx % len(self.colors)
@@ -1520,12 +1776,31 @@ class PythonTesterApp:
 							if col_idx < len(columns) - 1:
 								text_widget.insert("end", delimiter)
 						text_widget.insert("end", "\n")
+						
+						if is_extra:
+							text_widget.tag_add("extra_line", f"{line_num}.0", f"{line_num}.end")
+							self.viewer_window.extra_line_positions.append((text_widget, line_num))
+						elif is_modified:
+							text_widget.tag_add("modified_line", f"{line_num}.0", f"{line_num}.end")
+							self.viewer_window.extra_line_positions.append((text_widget, line_num))
+					
+					total_extra = len(self.viewer_window.extra_line_positions)
+					if self.viewer_window.current_extra_line >= total_extra:
+						self.viewer_window.current_extra_line = -1
+					
+					if total_extra > 0:
+						if self.viewer_window.current_extra_line == -1:
+							self.counter_label.config(text=f"0/{total_extra}")
+						else:
+							self.counter_label.config(text=f"{self.viewer_window.current_extra_line + 1}/{total_extra}")
+					else:
+						self.counter_label.config(text="0/0")
 					
 					text_widget.config(height=len(lines), state="disabled")
 				except Exception as e:
 					print(f"Error updating {file_path}: {e}")
 		
-		event_handler = FileChangeHandler(viewer, file_viewers, rainbow_colors)
+		event_handler = FileChangeHandler(viewer, file_viewers, rainbow_colors, extra_line_counter)
 		observer = Observer()
 		observer.schedule(event_handler, str(self.submissions_dir), recursive=False)
 		observer.start()
@@ -1538,7 +1813,7 @@ class PythonTesterApp:
 		
 		viewer.protocol("WM_DELETE_WINDOW", on_viewer_close)
 	
-	def _create_collapsible_csv_viewer(self, parent: ttk.Frame, file_path: Path, idx: int, colors: list) -> tk.Text | None:
+	def _create_collapsible_csv_viewer(self, parent: ttk.Frame, file_path: Path, idx: int, colors: list, base_file_path: Path = None, viewer_window = None) -> tk.Text | None:
 		file_frame = ttk.LabelFrame(parent, text=file_path.name, padding=5)
 		file_frame.pack(fill="both", expand=True, padx=5, pady=5)
 		
@@ -1563,8 +1838,18 @@ class PythonTesterApp:
 		lines = content.strip().split('\n')
 		num_lines = len(lines)
 		
+		base_lines = []
+		if base_file_path and base_file_path.exists():
+			try:
+				base_content = base_file_path.read_text(encoding="utf-8")
+				base_lines = base_content.strip().split('\n')
+			except Exception:
+				pass
+		
+		initial_font_size = int(11 * self.files_viewer_zoom)
+		
 		text_widget = tk.Text(content_frame, wrap="none",
-							  font=("Consolas", 11, "bold"),
+							  font=("Consolas", initial_font_size, "bold"),
 							  bg="white",
 							  borderwidth=2,
 							  relief="solid",
@@ -1572,14 +1857,27 @@ class PythonTesterApp:
 							  pady=10)
 		text_widget.pack(fill="both", expand=False, padx=5, pady=5)
 		
+		text_widget.tag_config("extra_line", background="#FFFF99")  # Yellow - new lines at end
+		text_widget.tag_config("modified_line", background="#FFD4A3")  # Light orange - modified content
+		text_widget.tag_config("current_extra_line", background="#FFA500")  # Orange - currently selected
+		
 		if lines:
 			first_line = lines[0]
 			delimiter = ',' if ',' in first_line else '\t'
 			
 			for i, color in enumerate(colors):
-				text_widget.tag_config(f"col{i}", foreground=color, font=("Consolas", 11, "bold"))
+				text_widget.tag_config(f"col{i}", foreground=color, font=("Consolas", initial_font_size, "bold"))
 			
-			for line in lines:
+			for line_idx, line in enumerate(lines):
+				line_num = line_idx + 1
+				
+				is_extra = line_idx >= len(base_lines)
+				is_modified = False
+				
+				if not is_extra and line_idx < len(base_lines):
+					if line.strip() != base_lines[line_idx].strip():
+						is_modified = True
+				
 				columns = line.split(delimiter)
 				for col_idx, column in enumerate(columns):
 					color_idx = col_idx % len(colors)
@@ -1587,6 +1885,15 @@ class PythonTesterApp:
 					if col_idx < len(columns) - 1:
 						text_widget.insert("end", delimiter)
 				text_widget.insert("end", "\n")
+				
+				if is_extra:
+					text_widget.tag_add("extra_line", f"{line_num}.0", f"{line_num}.end")
+					if viewer_window:
+						viewer_window.extra_line_positions.append((text_widget, line_num))
+				elif is_modified:
+					text_widget.tag_add("modified_line", f"{line_num}.0", f"{line_num}.end")
+					if viewer_window:
+						viewer_window.extra_line_positions.append((text_widget, line_num))
 		
 		text_widget.config(height=num_lines, state="disabled")
 		
@@ -1669,7 +1976,7 @@ class PythonTesterApp:
 		style.configure(".", font=("TkDefaultFont", new_font_size))
 		
 		text_font_size = int(10 * self.zoom_level)
-		self.output_text.configure(font=("TkFixedFont", text_font_size))
+		self.output_text.configure(font=("Consolas", text_font_size))
 		
 		if self.feedback_text:
 			self.feedback_text.configure(font=("TkDefaultFont", new_font_size))
@@ -1721,6 +2028,10 @@ class PythonTesterApp:
 						self.current_points = max(0, min(100, int(float(config["current_points"]))))
 					if "last_file_for_points" in config:
 						self.last_file_for_points = config["last_file_for_points"]
+					if "code_viewer_zoom" in config:
+						self.code_viewer_zoom = max(0.5, min(3.0, float(config["code_viewer_zoom"])))
+					if "files_viewer_zoom" in config:
+						self.files_viewer_zoom = max(0.5, min(3.0, float(config["files_viewer_zoom"])))
 			except (json.JSONDecodeError, ValueError, KeyError):
 				self.zoom_level = 1.0
 
@@ -1728,7 +2039,9 @@ class PythonTesterApp:
 		config = {
 			"zoom_level": self.zoom_level,
 			"current_points": self.current_points,
-			"last_file_for_points": self.last_file_for_points
+			"last_file_for_points": self.last_file_for_points,
+			"code_viewer_zoom": self.code_viewer_zoom,
+			"files_viewer_zoom": self.files_viewer_zoom
 		}
 		if self.submissions_dir is not None:
 			config["submissions_dir"] = str(self.submissions_dir)
