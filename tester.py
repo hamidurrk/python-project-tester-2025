@@ -1,4 +1,5 @@
 import json
+import os
 import queue
 import shutil
 import subprocess
@@ -143,13 +144,15 @@ class PythonTesterApp:
 		self.current_points = 100
 		self.last_file_for_points = None
 		self.feedback_text: ScrolledText | None = None  
-		self._resize_scheduled = False  
+		self._resize_scheduled = False
+		self.feedback_collapsed = True  
 
 		self._load_config()
 		self._create_menu()
 		self._build_layout()
 		self._load_predefined_inputs()
 		self._refresh_file_list()
+		self._update_button_states()  
 		self._poll_output_queue()
 		self._setup_zoom_bindings()
 		self._apply_zoom()  
@@ -224,7 +227,7 @@ class PythonTesterApp:
 		controls.columnconfigure((0, 1, 2, 3, 4), weight=1)
 
 		self.run_button = tk.Button(controls, text="▶ Run", command=self._run_selected_file,
-									 relief="raised", cursor="hand2")
+									 relief="raised", cursor="hand2", bg="#90EE90", activebackground="#7CCD7C")
 		self.run_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=2)
 
 		self.stop_button = tk.Button(controls, text="■ Stop", command=self._stop_process, 
@@ -372,11 +375,23 @@ class PythonTesterApp:
 		feedback_frame.grid(row=2, column=1, sticky="ew", padx=(0, 12), pady=(6, 12))
 		feedback_frame.columnconfigure(0, weight=1)
 		
-		self.feedback_text = ScrolledText(feedback_frame, wrap="word", height=3, width=30)
-		self.feedback_text.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+		feedback_header = ttk.Frame(feedback_frame)
+		feedback_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+		feedback_header.columnconfigure(0, weight=1)
 		
-		feedback_buttons_frame = ttk.Frame(feedback_frame)
-		feedback_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+		self.feedback_collapse_button = ttk.Button(feedback_header, text="▶ Show", width=12, command=self._toggle_feedback_collapse)
+		self.feedback_collapse_button.grid(row=0, column=0, sticky="w")
+		
+		self.feedback_content_frame = ttk.Frame(feedback_frame)
+		self.feedback_content_frame.grid(row=1, column=0, sticky="ew")
+		self.feedback_content_frame.grid_remove()  
+		self.feedback_content_frame.columnconfigure(0, weight=1)
+		
+		self.feedback_text = ScrolledText(self.feedback_content_frame, wrap="word", height=8, width=30)
+		self.feedback_text.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+		
+		feedback_buttons_frame = ttk.Frame(self.feedback_content_frame)
+		feedback_buttons_frame.grid(row=1, column=0, sticky="ew")
 		feedback_buttons_frame.columnconfigure(0, weight=1)
 		
 		reset_feedback_button = ttk.Button(feedback_buttons_frame, text="Reset", command=self._reset_feedback)
@@ -435,6 +450,21 @@ class PythonTesterApp:
 			self.directory_label.config(text="Directory: None", foreground="gray")
 		else:
 			self.directory_label.config(text=f"Directory: {self.submissions_dir}", foreground="black")
+		self._update_button_states()
+	
+	def _update_button_states(self) -> None:
+		"""Enable or disable buttons based on whether a directory is selected."""
+		if self.submissions_dir is None:
+			self.run_button.configure(state="disabled", bg=self.root.cget('bg'))
+			self.open_code_button.configure(state="disabled")
+			self.open_files_button.configure(state="disabled")
+		else:
+			if self.process and self.process.poll() is None:
+				self.run_button.configure(state="disabled", bg=self.root.cget('bg'))
+			else:
+				self.run_button.configure(state="normal", bg="#90EE90", activebackground="#7CCD7C")
+			self.open_code_button.configure(state="normal")
+			self.open_files_button.configure(state="normal")
 	
 	def _on_window_resize(self, event: tk.Event) -> None:
 		if event.widget != self.root:
@@ -518,20 +548,23 @@ class PythonTesterApp:
 			return
 
 		try:
-			# hide the console window on windows
 			creation_flags = 0
 			if sys.platform == 'win32':
 				creation_flags = subprocess.CREATE_NO_WINDOW
 			
+			env = os.environ.copy()
+			env['PYTHONUNBUFFERED'] = '1'
+			
 			self.process = subprocess.Popen(
-				[python_executable, str(script_path)],
+				[python_executable, '-u', str(script_path)],  
 				cwd=str(script_path.parent),
 				stdin=subprocess.PIPE,
 				stdout=subprocess.PIPE,
 				stderr=subprocess.STDOUT,
 				text=True,
-				bufsize=1,
+				bufsize=0,  
 				creationflags=creation_flags,
+				env=env,
 			)
 		except OSError as err:
 			messagebox.showerror("Execution Error", f"Failed to start process: {err}")
@@ -540,8 +573,8 @@ class PythonTesterApp:
 		self._clear_terminal()
 		self._append_output(f"Running {selected_file}...\n")
 
-		self.run_button.configure(state="disabled")
-		self.stop_button.configure(state="normal")
+		self.run_button.configure(state="disabled", bg=self.root.cget('bg'))
+		self.stop_button.configure(state="normal", bg="#FF6B6B", activebackground="#EE5A5A")
 
 		self.output_thread = threading.Thread(target=self._read_process_output, daemon=True)
 		self.output_thread.start()
@@ -558,9 +591,18 @@ class PythonTesterApp:
 
 	def _read_process_output(self) -> None:
 		assert self.process is not None and self.process.stdout is not None
-		for line in self.process.stdout:
-			self.output_queue.put(line)
-
+		
+		buffer = ""
+		while True:
+			char = self.process.stdout.read(1)
+			if not char:
+				break
+			
+			buffer += char
+			
+			if char:
+				self.output_queue.put(char)
+				
 		return_code = self.process.wait()
 		self.output_queue.put(f"\nProcess exited with code {return_code}.\n")
 		self.output_queue.put(None)  
@@ -937,7 +979,19 @@ class PythonTesterApp:
 		self.feedback_text.insert("1.0", template_content)
 	
 	def _reset_feedback(self) -> None:
+		"""Reset feedback text to template."""
 		self._load_feedback_template()
+	
+	def _toggle_feedback_collapse(self) -> None:
+		"""Toggle the feedback section collapse/expand state."""
+		if self.feedback_collapsed:
+			self.feedback_content_frame.grid()
+			self.feedback_collapse_button.config(text="▼ Hide")
+			self.feedback_collapsed = False
+		else:
+			self.feedback_content_frame.grid_remove()
+			self.feedback_collapse_button.config(text="▶ Show")
+			self.feedback_collapsed = True
 
 	def _load_predefined_inputs(self) -> None:
 		if PREDEFINED_INPUTS_PATH.exists():
@@ -1568,8 +1622,8 @@ class PythonTesterApp:
 				self.process.stdout.close()
 		self.process = None
 		self.output_thread = None
-		self.run_button.configure(state="normal")
-		self.stop_button.configure(state="disabled")
+		self.run_button.configure(state="normal", bg="#90EE90", activebackground="#7CCD7C")
+		self.stop_button.configure(state="disabled", bg=self.root.cget('bg'))
 
 	def _on_close(self) -> None:
 		if self.process and self.process.poll() is None:
