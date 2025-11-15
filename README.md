@@ -57,14 +57,16 @@ A Python submission testing application with an integrated terminal, syntax high
 ![](media/1.png)
 
 ### Code Viewer
+- Highlights `.open()` and `.close()` functions and show their count
+- Search functionality with next/previous match navigation
 - Dark mode with VS Code theme
 - Line numbers
 - Python syntax highlighting
-- Highlights `.open()` and `.close()` functions
 
 ![](media/2.png)
 
 ### Files Viewer
+- Highlights any changes in the data
 - Real-time CSV file monitoring
 - Rainbow column colors
 - Collapsible sections per file
@@ -148,6 +150,7 @@ Currently, pre-built executables are available only for `Windows`. MacOS builds 
 
 ### Predefined Inputs
 
+![](media/5.png)
 - **Add**: Type input and click "Add" or press Enter
 - **Send**: Select input and press Enter/Space or click "Send"
 - **Edit**: Double-click to edit inline
@@ -156,7 +159,7 @@ Currently, pre-built executables are available only for `Windows`. MacOS builds 
 - **Labels**: Start with `#` for section headers (displayed in blue)
 - **Import/Export**: File → Import/Export Predefined Inputs
 
-![](media/5.png)
+![](media/5-2.png)
 
 ### Data File Management
 
@@ -166,6 +169,10 @@ Currently, pre-built executables are available only for `Windows`. MacOS builds 
 4. Files are stored in `data/` folder
 
 ![](media/6.png)
+
+5. **Feedback Template**: Use predefined templates for consistent feedback
+
+![](media/7.png)
 
 ## Building from Source
 
