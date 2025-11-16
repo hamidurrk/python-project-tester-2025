@@ -150,8 +150,9 @@ class PythonTesterApp:
 		self.feedback_collapsed = True
 		self.code_viewer_zoom = 1.5  # Default zoom for code viewer
 		self.files_viewer_zoom = 1.4  # Default zoom for data files viewer
-		self.points_history: list[tuple[int, str]] = []  # Track (adjustment, checklist) pairs
-		self.last_accessed_preset_index: int = -1  # Track last highlighted preset input
+		self.points_history: list[tuple[int, str]] = []  
+		self.last_accessed_preset_index: int = -1
+		self.last_sent_preset_index: int = -1  
 
 		self._load_config()
 		self._create_menu()
@@ -166,7 +167,6 @@ class PythonTesterApp:
 		self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
 	def _center_window_on_parent(self, window: tk.Toplevel, width: int = None, height: int = None) -> None:
-		"""Position a window on the same screen as the main window, centered."""
 		window.update_idletasks()
 		
 		main_x = self.root.winfo_x()
@@ -357,14 +357,14 @@ class PythonTesterApp:
 		
 		vcmd = (self.root.register(validate_points_input), '%P')
 		
-		minus_button = ttk.Button(adjust_row, text="-", command=self._decrease_points, width=3)
+		minus_button = ttk.Button(adjust_row, text="-", command=self._decrease_points, width=3, takefocus=False)
 		minus_button.grid(row=0, column=0, padx=(0, 3))
 		
 		self.points_adjust_entry = ttk.Entry(adjust_row, textvariable=self.points_adjust_var, 
 											 width=4, validate='key', validatecommand=vcmd)
 		self.points_adjust_entry.grid(row=0, column=1, sticky="w", padx=(0, 3))
 		
-		plus_button = ttk.Button(adjust_row, text="+", command=self._increase_points, width=3)
+		plus_button = ttk.Button(adjust_row, text="+", command=self._increase_points, width=3, takefocus=False)
 		plus_button.grid(row=0, column=2,sticky="w", padx=(0, 6))
 		
 		history_button = ttk.Button(adjust_row, text="History", command=self._show_points_history, width=8)
@@ -512,7 +512,6 @@ class PythonTesterApp:
 		self._update_button_states()
 	
 	def _update_button_states(self) -> None:
-		"""Enable or disable buttons based on whether a directory is selected."""
 		if self.submissions_dir is None:
 			self.run_button.configure(state="disabled", bg=self.root.cget('bg'))
 			self.open_code_button.configure(state="disabled")
@@ -699,6 +698,7 @@ class PythonTesterApp:
 		selection = self.predefined_listbox.curselection()
 		if selection:
 			current_index = selection[0]
+			self.last_sent_preset_index = current_index
 			value = self.predefined_listbox.get(current_index)
 			
 			if not value.strip().startswith("#"):
@@ -709,6 +709,7 @@ class PythonTesterApp:
 				self.predefined_listbox.selection_clear(0, tk.END)
 				self.predefined_listbox.selection_set(next_index)
 				self.predefined_listbox.see(next_index)
+				self.last_accessed_preset_index = next_index
 
 	def _handle_predefined_double_click(self, event: tk.Event) -> None:
 		self._edit_selected_predefined()
@@ -877,10 +878,13 @@ class PythonTesterApp:
 			self.last_accessed_preset_index = selection[0]
 
 	def _find_associated_checklist(self) -> str:
-		if not self.predefined_inputs or self.last_accessed_preset_index < 0:
+		"""Find checklist for the currently highlighted line."""
+		index_to_use = self.last_accessed_preset_index
+		
+		if not self.predefined_inputs or index_to_use < 0:
 			return "No checklist found"
 		
-		for i in range(self.last_accessed_preset_index, -1, -1):
+		for i in range(index_to_use, -1, -1):
 			item = self.predefined_inputs[i].strip()
 			if item.startswith("# Checklist"):
 				return item
@@ -1118,11 +1122,9 @@ class PythonTesterApp:
 		self.feedback_text.insert("1.0", template_content)
 	
 	def _reset_feedback(self) -> None:
-		"""Reset feedback text to template."""
 		self._load_feedback_template()
 	
 	def _toggle_feedback_collapse(self) -> None:
-		"""Toggle the feedback section collapse/expand state."""
 		if self.feedback_collapsed:
 			self.feedback_content_frame.grid()
 			self.feedback_collapse_button.config(text="▼ Hide")
