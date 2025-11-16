@@ -1,11 +1,13 @@
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
 import threading
 import tkinter as tk
+import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from tkinter import ttk
@@ -148,6 +150,8 @@ class PythonTesterApp:
 		self.feedback_collapsed = True
 		self.code_viewer_zoom = 1.5  # Default zoom for code viewer
 		self.files_viewer_zoom = 1.4  # Default zoom for data files viewer
+		self.points_history: list[tuple[int, str]] = []  # Track (adjustment, checklist) pairs
+		self.last_accessed_preset_index: int = -1  # Track last highlighted preset input
 
 		self._load_config()
 		self._create_menu()
@@ -161,12 +165,36 @@ class PythonTesterApp:
 		self._update_points_display() 
 		self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+	def _center_window_on_parent(self, window: tk.Toplevel, width: int = None, height: int = None) -> None:
+		"""Position a window on the same screen as the main window, centered."""
+		window.update_idletasks()
+		
+		main_x = self.root.winfo_x()
+		main_y = self.root.winfo_y()
+		main_width = self.root.winfo_width()
+		main_height = self.root.winfo_height()
+		
+		if width is None:
+			width = window.winfo_reqwidth()
+		if height is None:
+			height = window.winfo_reqheight()
+		
+		x = main_x + (main_width - width) // 2
+		y = main_y + (main_height - height) // 2
+		
+		x = max(0, x)
+		y = max(0, y)
+		
+		window.geometry(f"{width}x{height}+{x}+{y}")
+
 	def _create_menu(self) -> None:
 		self.menubar = tk.Menu(self.root)
 		self.root.config(menu=self.menubar)
 
 		self.file_menu = tk.Menu(self.menubar, tearoff=0)
 		self.menubar.add_cascade(label="File", menu=self.file_menu)
+		self.file_menu.add_command(label="Extract Submissions", command=self._extract_submissions)
+		self.file_menu.add_separator()
 		self.file_menu.add_command(label="Import Predefined Inputs", command=self._import_predefined_inputs)
 		self.file_menu.add_command(label="Export Predefined Inputs", command=self._export_predefined_inputs)
 		self.file_menu.add_separator()
@@ -314,18 +342,36 @@ class PythonTesterApp:
 		
 		adjust_row = ttk.Frame(points_frame)
 		adjust_row.grid(row=1, column=1, sticky="ew", pady=(6, 0))
-		adjust_row.columnconfigure(0, weight=1)
+		adjust_row.columnconfigure(2, weight=1)
 
-		self.points_adjust_var = tk.StringVar(value="-4")
-		self.points_adjust_entry = ttk.Entry(adjust_row, textvariable=self.points_adjust_var, width=8)
-		self.points_adjust_entry.grid(row=0, column=0, sticky="w", padx=(0, 6))
-		self.points_adjust_entry.bind("<Return>", lambda e: self._adjust_points())
-
-		apply_button = ttk.Button(adjust_row, text="Apply", command=self._adjust_points, width=8)
-		apply_button.grid(row=0, column=1)
+		self.points_adjust_var = tk.StringVar(value="4")
+		
+		def validate_points_input(new_value):
+			if new_value == "":
+				return True
+			try:
+				value = int(new_value)
+				return 1 <= value <= 100
+			except ValueError:
+				return False
+		
+		vcmd = (self.root.register(validate_points_input), '%P')
+		
+		minus_button = ttk.Button(adjust_row, text="-", command=self._decrease_points, width=3)
+		minus_button.grid(row=0, column=0, padx=(0, 3))
+		
+		self.points_adjust_entry = ttk.Entry(adjust_row, textvariable=self.points_adjust_var, 
+											 width=4, validate='key', validatecommand=vcmd)
+		self.points_adjust_entry.grid(row=0, column=1, sticky="w", padx=(0, 3))
+		
+		plus_button = ttk.Button(adjust_row, text="+", command=self._increase_points, width=3)
+		plus_button.grid(row=0, column=2,sticky="w", padx=(0, 6))
+		
+		history_button = ttk.Button(adjust_row, text="History", command=self._show_points_history, width=8)
+		history_button.grid(row=0, column=3, sticky="e", padx=(0, 6))
 
 		reset_button = ttk.Button(adjust_row, text="Reset", command=self._reset_points, width=8)
-		reset_button.grid(row=0, column=2, padx=(6, 0))
+		reset_button.grid(row=0, column=4, sticky="e")
 
 		sidebar = ttk.LabelFrame(self.root, text="Preset Inputs", padding=12)
 		sidebar.grid(row=1, column=1, sticky="nsew", padx=(0, 12), pady=(6, 6))
@@ -345,8 +391,18 @@ class PythonTesterApp:
 		move_down_button = ttk.Button(label_row, text="↓", width=3, command=self._move_predefined_down)
 		move_down_button.grid(row=0, column=2)
 
-		self.predefined_listbox = tk.Listbox(sidebar, height=15)
-		self.predefined_listbox.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
+		listbox_frame = ttk.Frame(sidebar)
+		listbox_frame.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
+		listbox_frame.columnconfigure(0, weight=1)
+		listbox_frame.rowconfigure(0, weight=1)
+
+		self.predefined_listbox = tk.Listbox(listbox_frame, height=15)
+		self.predefined_listbox.grid(row=0, column=0, sticky="nsew")
+		
+		listbox_scrollbar = ttk.Scrollbar(listbox_frame, orient="vertical", command=self.predefined_listbox.yview)
+		listbox_scrollbar.grid(row=0, column=1, sticky="ns")
+		self.predefined_listbox.config(yscrollcommand=listbox_scrollbar.set)
+		
 		self.predefined_listbox.bind("<Double-Button-1>", self._handle_predefined_double_click)
 		self.predefined_listbox.bind("<Return>", lambda e: self._send_selected_predefined())
 		self.predefined_listbox.bind("<space>", lambda e: self._handle_space_key())
@@ -354,6 +410,7 @@ class PythonTesterApp:
 		self.predefined_listbox.bind("<Button-3>", self._show_context_menu)
 		self.predefined_listbox.bind("<Control-Return>", lambda e: self._insert_row_below())
 		self.predefined_listbox.bind("<Delete>", lambda e: self._remove_selected_predefined())
+		self.predefined_listbox.bind("<<ListboxSelect>>", self._track_preset_selection)
 		self.predefined_listbox.bind("<FocusIn>", lambda e: self._check_predefined_empty())
 		
 		self.context_menu = tk.Menu(self.predefined_listbox, tearoff=0)
@@ -735,9 +792,9 @@ class PythonTesterApp:
 	def _show_hotkeys_dialog(self) -> None:
 		hotkeys_window = tk.Toplevel(self.root)
 		hotkeys_window.title("Keyboard Shortcuts")
-		hotkeys_window.geometry("550x400")
 		hotkeys_window.transient(self.root)
 		hotkeys_window.grab_set()
+		self._center_window_on_parent(hotkeys_window, 550, 400)
 		
 		main_frame = ttk.Frame(hotkeys_window, padding=20)
 		main_frame.pack(fill="both", expand=True)
@@ -813,6 +870,22 @@ class PythonTesterApp:
 			return
 
 		self._append_output(f"> {text}\n")
+
+	def _track_preset_selection(self, event=None) -> None:
+		selection = self.predefined_listbox.curselection()
+		if selection:
+			self.last_accessed_preset_index = selection[0]
+
+	def _find_associated_checklist(self) -> str:
+		if not self.predefined_inputs or self.last_accessed_preset_index < 0:
+			return "No checklist found"
+		
+		for i in range(self.last_accessed_preset_index, -1, -1):
+			item = self.predefined_inputs[i].strip()
+			if item.startswith("# Checklist"):
+				return item
+		
+		return "No checklist found"
 
 	def _remove_selected_predefined(self) -> None:
 		selection = self.predefined_listbox.curselection()
@@ -914,10 +987,74 @@ class PythonTesterApp:
 			self._save_config()
 		except ValueError:
 			messagebox.showerror("Invalid Input", "Please enter a valid number (e.g., -4, +5, or 3)")
+	
+	def _decrease_points(self) -> None:
+		try:
+			adjustment = int(self.points_adjust_var.get().strip())
+			self.current_points -= adjustment
+			self.current_points = max(0, min(100, self.current_points))
+			
+			checklist = self._find_associated_checklist()
+			self.points_history.append((-adjustment, checklist))
+			
+			self._update_points_display()
+			self._save_config()
+		except ValueError:
+			messagebox.showerror("Invalid Input", "Please enter a valid number between 1 and 100")
+	
+	def _increase_points(self) -> None:
+		try:
+			adjustment = int(self.points_adjust_var.get().strip())
+			self.current_points += adjustment
+			self.current_points = max(0, min(100, self.current_points))
+			
+			checklist = self._find_associated_checklist()
+			self.points_history.append((adjustment, checklist))
+			
+			self._update_points_display()
+			self._save_config()
+		except ValueError:
+			messagebox.showerror("Invalid Input", "Please enter a valid number between 1 and 100")
+	
+	def _show_points_history(self) -> None:
+		if not self.points_history:
+			messagebox.showinfo("Points History", "No point adjustments have been made yet.")
+			return
+		
+		history_window = tk.Toplevel(self.root)
+		history_window.title("Points History")
+		
+		base_width = 600
+		base_height = 400
+		zoomed_width = int(base_width * self.zoom_level)
+		zoomed_height = int(base_height * self.zoom_level)
+		self._center_window_on_parent(history_window, zoomed_width, zoomed_height)
+		
+		padx_val = int(10 * self.zoom_level)
+		pady_val = int(10 * self.zoom_level)
+		
+		text_frame = ttk.Frame(history_window)
+		text_frame.pack(fill="both", expand=True, padx=padx_val, pady=pady_val)
+		
+		base_font_size = 10
+		zoomed_font_size = int(base_font_size * self.zoom_level)
+		
+		history_text = ScrolledText(text_frame, wrap="word", font=("Consolas", zoomed_font_size))
+		history_text.pack(fill="both", expand=True)
+		
+		for i, (adjustment, checklist) in enumerate(self.points_history, 1):
+			sign = "+" if adjustment > 0 else ""
+			history_text.insert("end", f"{i}. {sign}{adjustment}: {checklist}\n")
+		
+		history_text.config(state="disabled")
+		
+		button_pady = int(5 * self.zoom_level)
+		ttk.Button(history_window, text="Close", command=history_window.destroy).pack(pady=button_pady)
 
 	def _reset_points(self) -> None:
 		self.current_points = 100
-		self.points_adjust_var.set("-4")
+		self.points_adjust_var.set("4")
+		self.points_history.clear()  
 		self._update_points_display()
 		self._save_config()
 
@@ -1063,13 +1200,148 @@ class PythonTesterApp:
 			messagebox.showinfo("Export Success", f"Exported {len(self.predefined_inputs)} items to:\n{file_path}")
 		except Exception as e:
 			messagebox.showerror("Export Error", f"Failed to export file: {e}")
+	
+	def _extract_submissions(self) -> None:
+		extract_window = tk.Toplevel(self.root)
+		extract_window.title("Extract Submissions")
+		extract_window.transient(self.root)
+		extract_window.grab_set()
+		self._center_window_on_parent(extract_window, 600, 300)
+		
+		main_frame = ttk.Frame(extract_window, padding=20)
+		main_frame.pack(fill="both", expand=True)
+		main_frame.columnconfigure(1, weight=1)
+		
+		ttk.Label(main_frame, text="Source Directory:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 5))
+		
+		source_frame = ttk.Frame(main_frame)
+		source_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 20))
+		source_frame.columnconfigure(0, weight=1)
+		
+		source_var = tk.StringVar()
+		source_entry = ttk.Entry(source_frame, textvariable=source_var, state="readonly")
+		source_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+		
+		def browse_source():
+			file_path = filedialog.askopenfilename(
+				title="Select a ZIP file (parent folder will be used)",
+				filetypes=[("ZIP files", "*.zip"), ("All files", "*.*")],
+				initialdir=source_var.get() if source_var.get() else None
+			)
+			if file_path:
+				parent_dir = str(Path(file_path).parent)
+				source_var.set(parent_dir)
+		
+		ttk.Button(source_frame, text="Browse...", command=browse_source).grid(row=0, column=1)
+		
+		ttk.Label(main_frame, text="Destination Directory:", font=("TkDefaultFont", 10, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 5))
+		
+		dest_frame = ttk.Frame(main_frame)
+		dest_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(0, 20))
+		dest_frame.columnconfigure(0, weight=1)
+		
+		dest_var = tk.StringVar()
+		dest_entry = ttk.Entry(dest_frame, textvariable=dest_var, state="readonly")
+		dest_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+		
+		def browse_dest():
+			directory = filedialog.askdirectory(title="Select Destination Directory", mustexist=True)
+			if directory:
+				dest_var.set(directory)
+		
+		ttk.Button(dest_frame, text="Browse...", command=browse_dest).grid(row=0, column=1)
+		
+		progress_var = tk.StringVar(value="")
+		progress_label = ttk.Label(main_frame, textvariable=progress_var, foreground="blue")
+		progress_label.grid(row=4, column=0, columnspan=3, pady=(0, 10))
+		
+		button_frame = ttk.Frame(main_frame)
+		button_frame.grid(row=5, column=0, columnspan=3)
+		
+		def start_extraction():
+			source_dir = source_var.get()
+			dest_dir = dest_var.get()
+			
+			if not source_dir or not dest_dir:
+				messagebox.showwarning("Missing Information", "Please select both source and destination directories.")
+				return
+			
+			source_path = Path(source_dir)
+			dest_path = Path(dest_dir)
+			
+			if not source_path.exists():
+				messagebox.showerror("Error", "Source directory does not exist.")
+				return
+			
+			if not dest_path.exists():
+				messagebox.showerror("Error", "Destination directory does not exist.")
+				return
+			
+			pattern = r"Submit your project work \(Closes at \d{4}-\d{2}-\d{2} \d{2}_\d{2}\)-(.+)-archive\.zip"
+			
+			zip_files = list(source_path.glob("*.zip"))
+			matched_files = []
+			
+			for zip_file in zip_files:
+				match = re.match(pattern, zip_file.name)
+				if match:
+					name = match.group(1)
+					matched_files.append((zip_file, name))
+			
+			if not matched_files:
+				messagebox.showinfo("No Files", "No matching zip files found in the source directory.")
+				return
+			
+			progress_var.set(f"Found {len(matched_files)} submission(s). Extracting...")
+			extract_window.update()
+			
+			success_count = 0
+			error_count = 0
+			
+			for count, (zip_file, name) in enumerate(matched_files, start=1):
+				try:
+					temp_extract_path = dest_path / f"_temp_{name}"
+					
+					with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+						zip_ref.extractall(temp_extract_path)
+					
+					top_dir = temp_extract_path / "top"
+					
+					if top_dir.exists() and top_dir.is_dir():
+						final_dest = dest_path / f"{count} - {name}"
+						
+						if final_dest.exists():
+							shutil.rmtree(final_dest)
+						
+						shutil.move(str(top_dir), str(final_dest))
+						success_count += 1
+					else:
+						error_count += 1
+						print(f"Warning: 'top' directory not found in {zip_file.name}")
+					
+					if temp_extract_path.exists():
+						shutil.rmtree(temp_extract_path)
+					
+					progress_var.set(f"Processing: {count}/{len(matched_files)}")
+					extract_window.update()
+					
+				except Exception as e:
+					error_count += 1
+					print(f"Error extracting {zip_file.name}: {e}")
+			
+			progress_var.set(f"Complete! Success: {success_count}, Errors: {error_count}")
+			messagebox.showinfo("Extraction Complete", 
+							   f"Successfully extracted: {success_count}\nErrors: {error_count}\n\nDestination: {dest_dir}")
+		
+		ttk.Button(button_frame, text="Extract", command=start_extraction, width=15).pack(side="left", padx=5)
+		ttk.Button(button_frame, text="Cancel", command=extract_window.destroy, width=15).pack(side="left", padx=5)
 
 	def _open_settings(self) -> None:
 		settings_window = tk.Toplevel(self.root)
 		settings_window.title("Settings")
-		settings_window.geometry("600x500")
 		settings_window.transient(self.root)
 		settings_window.grab_set()
+		self._center_window_on_parent(settings_window, 600, 500)
 		
 		notebook = ttk.Notebook(settings_window)
 		notebook.pack(fill="both", expand=True, padx=10, pady=10)
@@ -1243,7 +1515,9 @@ class PythonTesterApp:
 		window_width = int(screen_width * 1 / 2)
 		window_height = screen_height
 		
-		viewer.geometry(f"{window_width}x{window_height}+0+0")
+		main_x = self.root.winfo_x()
+		main_y = self.root.winfo_y()
+		viewer.geometry(f"{window_width}x{window_height}+{main_x}+{main_y}")
 		viewer.configure(bg="#1E1E1E")
 		
 		viewer.zoom_level = self.code_viewer_zoom
@@ -1561,7 +1835,9 @@ class PythonTesterApp:
 		window_width = int(screen_width * 2 / 5)
 		window_height = screen_height
 		
-		viewer.geometry(f"{window_width}x{window_height}+0+0")
+		main_x = self.root.winfo_x()
+		main_y = self.root.winfo_y()
+		viewer.geometry(f"{window_width}x{window_height}+{main_x}+{main_y}")
 		
 		viewer.zoom_level = self.files_viewer_zoom
 		viewer.text_widgets = []
@@ -1920,6 +2196,8 @@ class PythonTesterApp:
 			self.predefined_listbox.insert(tk.END, item)
 			if item.strip().startswith("#"):
 				self.predefined_listbox.itemconfig(i, fg="blue", selectbackground="lightblue")
+			if item.strip().startswith("# Checklist "):
+				self.predefined_listbox.itemconfig(i, fg="green", selectbackground="lightblue")
 
 	def _on_process_end(self) -> None:
 		if self.process:
