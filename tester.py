@@ -1,5 +1,6 @@
 import json
 import os
+import platform
 import queue
 import re
 import shutil
@@ -116,7 +117,7 @@ class PythonTesterApp:
 		self.root = root
 		self.root.title("Project Tester")
 		
-		self.root.minsize(1024, 600)
+		self.root.minsize(1220, 600)
 		
 		self.root.state('zoomed')
 		
@@ -224,16 +225,24 @@ class PythonTesterApp:
 
 		header_row = ttk.Frame(main_frame)
 		header_row.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-		header_row.columnconfigure(1, weight=1)
+		header_row.columnconfigure(0, weight=1)
+
+		# horizontal line
+		ttk.Separator(header_row, orient="horizontal").grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 8))
 		
-		ttk.Label(header_row, text="Submission File").grid(row=0, column=0, sticky="w")
+		# ttk.Label(header_row, text="Submission File").grid(row=0, column=0, sticky="w")
 		
 		self.directory_label = ttk.Label(header_row, text="Directory: None", foreground="gray")
-		self.directory_label.grid(row=0, column=1, sticky="w", padx=(20, 0))
+		self.directory_label.grid(row=0, column=0, sticky="w")
+		
+		browse_button = ttk.Button(header_row, text="📁 Browse", command=self._browse_directory)
+		browse_button.grid(row=0, column=1, sticky="w", padx=(6, 0))
+		# open_dir_button = ttk.Button(header_row, text="📁", command=self._open_current_directory, width=3)
+		# open_dir_button.grid(row=0, column=2, sticky="w", padx=(6, 0))
 
 		file_row = ttk.Frame(main_frame)
 		file_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-		file_row.columnconfigure(0, weight=1)
+		file_row.columnconfigure(3, weight=1)
 
 		self.file_combo = ttk.Combobox(
 			file_row,
@@ -241,20 +250,18 @@ class PythonTesterApp:
 			state="readonly",
 			postcommand=self._refresh_file_list,
 		)
-		self.file_combo.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+		self.file_combo.grid(row=0, column=1, sticky="w", padx=(0, 12))
 
-		refresh_button = ttk.Button(file_row, text="Refresh", command=self._refresh_file_list)
-		refresh_button.grid(row=0, column=1, padx=(0, 6))
+		refresh_button = ttk.Button(file_row, text="⟳", command=self._refresh_file_list, width=3)
+		refresh_button.grid(row=0, column=0, sticky="w", padx=(0, 6))
 
-		browse_button = ttk.Button(file_row, text="Browse", command=self._browse_directory)
-		browse_button.grid(row=0, column=2, padx=(0, 6))
 
-		reset_files_button = ttk.Button(file_row, text="Reset Files", command=self._reset_files)
-		reset_files_button.grid(row=0, column=3)
+		reset_files_button = ttk.Button(file_row, text="Reset Project Files", command=self._reset_files, width=20)
+		reset_files_button.grid(row=0, column=3, sticky="e")
 
 		controls = ttk.Frame(main_frame)
 		controls.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-		controls.columnconfigure((0, 1, 2, 3, 4), weight=1)
+		controls.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
 
 		self.run_button = tk.Button(controls, text="▶ Run", command=self._run_selected_file,
 									 relief="raised", cursor="hand2", bg="#90EE90", activebackground="#7CCD7C")
@@ -274,7 +281,11 @@ class PythonTesterApp:
 
 		self.open_files_button = tk.Button(controls, text="Open Files", command=self._open_files_viewer,
 											relief="raised", cursor="hand2")
-		self.open_files_button.grid(row=0, column=4, sticky="ew", pady=2)
+		self.open_files_button.grid(row=0, column=4, sticky="ew", padx=(0, 6), pady=2)
+
+		self.open_ai_button = tk.Button(controls, text="Open ai.txt", command=self._open_ai_txt,
+										 relief="raised", cursor="hand2")
+		self.open_ai_button.grid(row=0, column=5, sticky="ew", pady=2)
 
 		terminal_frame = ttk.LabelFrame(main_frame, text="Terminal")
 		terminal_frame.grid(row=3, column=0, sticky="nsew")
@@ -382,7 +393,7 @@ class PythonTesterApp:
 		label_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 		label_row.columnconfigure(0, weight=1)
 
-		hotkeys_button = ttk.Button(label_row, text="Shortcuts", command=self._show_hotkeys_dialog)
+		hotkeys_button = ttk.Button(label_row, text="Guide", command=self._show_hotkeys_dialog)
 		hotkeys_button.grid(row=0, column=0, sticky="w")
 
 		move_up_button = ttk.Button(label_row, text="↑", width=3, command=self._move_predefined_up)
@@ -454,7 +465,10 @@ class PythonTesterApp:
 		feedback_buttons_frame.columnconfigure(0, weight=1)
 		
 		reset_feedback_button = ttk.Button(feedback_buttons_frame, text="Reset", command=self._reset_feedback)
-		reset_feedback_button.grid(row=0, column=1, sticky="e", padx=(16, 6))
+		reset_feedback_button.grid(row=0, column=0, sticky="w", padx=(0, 6))
+		
+		save_feedback_button = ttk.Button(feedback_buttons_frame, text="Save", command=self._save_feedback)
+		save_feedback_button.grid(row=0, column=1, sticky="e", padx=(16, 6))
 		
 		if self.copy_icon:
 			copy_feedback_button = tk.Button(feedback_buttons_frame, image=self.copy_icon, command=self._copy_feedback,
@@ -539,7 +553,7 @@ class PythonTesterApp:
 		
 		screen_width = self.root.winfo_screenwidth()
 		threshold_width = max(int(screen_width * 2 / 3), 1280)
-		
+
 		if window_width < threshold_width:
 			self.root.columnconfigure(0, weight=5, uniform="equal")
 			self.root.columnconfigure(1, weight=3, uniform="equal")
@@ -567,8 +581,24 @@ class PythonTesterApp:
 				self.last_opened_file = file_path.name
 				self._save_config()
 				self._refresh_file_list()
+				self._load_feedback_from_directory()
 			else:
 				messagebox.showerror("File Error", "Please select a valid Python file.")
+
+	def _open_current_directory(self) -> None:
+		if self.submissions_dir is None or not self.submissions_dir.exists():
+			messagebox.showwarning("No Directory", "No directory is currently selected.\nPlease browse to a directory first.")
+			return
+		
+		try:
+			if platform.system() == "Windows":
+				subprocess.Popen(["explorer", str(self.submissions_dir)])
+			elif platform.system() == "Darwin":  # macOS
+				subprocess.Popen(["open", str(self.submissions_dir)])
+			else:  # Linux and others
+				subprocess.Popen(["xdg-open", str(self.submissions_dir)])
+		except Exception as e:
+			messagebox.showerror("Error", f"Could not open directory: {e}")
 
 	def _run_selected_file(self) -> None:
 		if self.process and self.process.poll() is None:
@@ -1121,8 +1151,53 @@ class PythonTesterApp:
 		self.feedback_text.delete("1.0", tk.END)
 		self.feedback_text.insert("1.0", template_content)
 	
+	def _save_feedback(self) -> None:
+		if not self.feedback_text:
+			return
+		
+		if self.submissions_dir is None or not self.submissions_dir.exists():
+			messagebox.showwarning("No Directory", "Please select a directory first.")
+			return
+		
+		feedback_file = self.submissions_dir / "FEEDBACK.txt"
+		feedback_content = self.feedback_text.get("1.0", "end-1c")
+		
+		try:
+			feedback_file.write_text(feedback_content, encoding="utf-8")
+			messagebox.showinfo("Feedback Saved", f"Feedback saved to:\n{feedback_file}")
+		except Exception as e:
+			messagebox.showerror("Save Error", f"Failed to save feedback: {e}")
+	
+	def _load_feedback_from_directory(self) -> None:
+		if not self.feedback_text:
+			return
+		
+		if self.submissions_dir is None or not self.submissions_dir.exists():
+			self._load_feedback_template()
+			return
+		
+		feedback_file = self.submissions_dir / "FEEDBACK.txt"
+		
+		if feedback_file.exists():
+			try:
+				feedback_content = feedback_file.read_text(encoding="utf-8")
+				self.feedback_text.delete("1.0", tk.END)
+				self.feedback_text.insert("1.0", feedback_content)
+			except Exception as e:
+				print(f"Failed to load feedback from directory: {e}")
+				self._load_feedback_template()
+		else:
+			self._load_feedback_template()
+	
 	def _reset_feedback(self) -> None:
 		self._load_feedback_template()
+		if self.submissions_dir and self.submissions_dir.exists() and self.feedback_text:
+			feedback_file = self.submissions_dir / "FEEDBACK.txt"
+			feedback_content = self.feedback_text.get("1.0", "end-1c")
+			try:
+				feedback_file.write_text(feedback_content, encoding="utf-8")
+			except Exception as e:
+				print(f"Failed to auto-save feedback after reset: {e}")
 	
 	def _toggle_feedback_collapse(self) -> None:
 		if self.feedback_collapsed:
@@ -1279,6 +1354,18 @@ class PythonTesterApp:
 				messagebox.showerror("Error", "Destination directory does not exist.")
 				return
 			
+			existing_names = set()
+			max_count = 0
+			
+			for item in dest_path.iterdir():
+				if item.is_dir():
+					match = re.match(r"(\d+)\s*-\s*(.+)", item.name)
+					if match:
+						count_num = int(match.group(1))
+						name = match.group(2)
+						max_count = max(max_count, count_num)
+						existing_names.add(name)
+			
 			pattern = r"Submit your project work \(Closes at \d{4}-\d{2}-\d{2} \d{2}_\d{2}\)-(.+)-archive\.zip"
 			
 			zip_files = list(source_path.glob("*.zip"))
@@ -1288,20 +1375,25 @@ class PythonTesterApp:
 				match = re.match(pattern, zip_file.name)
 				if match:
 					name = match.group(1)
-					matched_files.append((zip_file, name))
+					if name not in existing_names:
+						matched_files.append((zip_file, name))
 			
 			if not matched_files:
-				messagebox.showinfo("No Files", "No matching zip files found in the source directory.")
+				messagebox.showinfo("No New Files", "No new submissions found to extract.\nAll students already exist in the destination directory.")
 				return
 			
-			progress_var.set(f"Found {len(matched_files)} submission(s). Extracting...")
+			progress_var.set(f"Found {len(matched_files)} new submission(s). Extracting...")
 			extract_window.update()
 			
 			success_count = 0
 			error_count = 0
+			error_files = []
+			current_count = max_count
+			skipped_count = len(zip_files) - len(matched_files)
 			
-			for count, (zip_file, name) in enumerate(matched_files, start=1):
+			for zip_file, name in matched_files:
 				try:
+					current_count += 1
 					temp_extract_path = dest_path / f"_temp_{name}"
 					
 					with zipfile.ZipFile(zip_file, 'r') as zip_ref:
@@ -1310,7 +1402,7 @@ class PythonTesterApp:
 					top_dir = temp_extract_path / "top"
 					
 					if top_dir.exists() and top_dir.is_dir():
-						final_dest = dest_path / f"{count} - {name}"
+						final_dest = dest_path / f"{current_count} - {name}"
 						
 						if final_dest.exists():
 							shutil.rmtree(final_dest)
@@ -1319,21 +1411,33 @@ class PythonTesterApp:
 						success_count += 1
 					else:
 						error_count += 1
+						error_files.append(f"{zip_file.name} (no 'top' directory)")
 						print(f"Warning: 'top' directory not found in {zip_file.name}")
 					
 					if temp_extract_path.exists():
 						shutil.rmtree(temp_extract_path)
 					
-					progress_var.set(f"Processing: {count}/{len(matched_files)}")
+					progress_var.set(f"Processing: {success_count + error_count}/{len(matched_files)}")
 					extract_window.update()
 					
 				except Exception as e:
 					error_count += 1
+					error_files.append(f"{zip_file.name} ({str(e)})")
 					print(f"Error extracting {zip_file.name}: {e}")
 			
-			progress_var.set(f"Complete! Success: {success_count}, Errors: {error_count}")
-			messagebox.showinfo("Extraction Complete", 
-							   f"Successfully extracted: {success_count}\nErrors: {error_count}\n\nDestination: {dest_dir}")
+			progress_var.set(f"Complete! Success: {success_count}, Errors: {error_count}, Skipped: {skipped_count}")
+			
+			message = f"Successfully extracted: {success_count}\n"
+			if error_count > 0:
+				message += f"\nErrors: {error_count}\n"
+				message += "\nFailed files:\n"
+				for error_file in error_files:
+					message += f"  • {error_file}\n"
+			if skipped_count > 0:
+				message += f"\nSkipped (already exist): {skipped_count}\n"
+			message += f"\nDestination: {dest_dir}"
+			
+			messagebox.showinfo("Extraction Complete", message)
 		
 		ttk.Button(button_frame, text="Extract", command=start_extraction, width=15).pack(side="left", padx=5)
 		ttk.Button(button_frame, text="Cancel", command=extract_window.destroy, width=15).pack(side="left", padx=5)
@@ -1519,7 +1623,7 @@ class PythonTesterApp:
 		
 		main_x = self.root.winfo_x()
 		main_y = self.root.winfo_y()
-		viewer.geometry(f"{window_width}x{window_height}+{main_x}+{main_y}")
+		viewer.geometry(f"{window_width}x{window_height - 80}+{main_x}+{main_y}")
 		viewer.configure(bg="#1E1E1E")
 		
 		viewer.zoom_level = self.code_viewer_zoom
@@ -1829,17 +1933,16 @@ class PythonTesterApp:
 			return
 		
 		viewer = tk.Toplevel(self.root)
-		viewer.title("Data Files Viewer (Live)")
+		viewer.title("Data Files Viewer")
 		
 		screen_width = viewer.winfo_screenwidth()
 		screen_height = viewer.winfo_screenheight()
 		
 		window_width = int(screen_width * 2 / 5)
 		window_height = screen_height
-		
 		main_x = self.root.winfo_x()
 		main_y = self.root.winfo_y()
-		viewer.geometry(f"{window_width}x{window_height}+{main_x}+{main_y}")
+		viewer.geometry(f"{window_width}x{window_height - 80}+{main_x}+{main_y}")
 		
 		viewer.zoom_level = self.files_viewer_zoom
 		viewer.text_widgets = []
@@ -1871,7 +1974,8 @@ class PythonTesterApp:
 		next_extra_button.pack(side="left")
 		
 		main_canvas = tk.Canvas(viewer)
-		main_scrollbar = ttk.Scrollbar(viewer, orient="vertical", command=main_canvas.yview)
+		main_scrollbar_y = ttk.Scrollbar(viewer, orient="vertical", command=main_canvas.yview)
+		main_scrollbar_x = ttk.Scrollbar(viewer, orient="horizontal", command=main_canvas.xview)
 		scrollable_frame = ttk.Frame(main_canvas)
 		
 		scrollable_frame.bind(
@@ -1880,13 +1984,16 @@ class PythonTesterApp:
 		)
 		
 		main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-		main_canvas.configure(yscrollcommand=main_scrollbar.set)
+		main_canvas.configure(yscrollcommand=main_scrollbar_y.set, xscrollcommand=main_scrollbar_x.set)
 		
 		main_canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
-		main_scrollbar.pack(side="right", fill="y")
+		main_scrollbar_y.pack(side="right", fill="y")
+		main_scrollbar_x.pack(side="bottom", fill="x", before=main_canvas)
 		
 		def on_mousewheel(event):
-			if not (event.state & 0x0004):  
+			if event.state & 0x0001:  # Shift key pressed
+				main_canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+			else:
 				main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 		
 		viewer.bind("<MouseWheel>", on_mousewheel)
@@ -2091,6 +2198,44 @@ class PythonTesterApp:
 		
 		viewer.protocol("WM_DELETE_WINDOW", on_viewer_close)
 	
+	def _open_ai_txt(self) -> None:
+		if self.submissions_dir is None:
+			messagebox.showwarning("No Directory", "Please browse and select a directory first.")
+			return
+		
+		ai_file = self.submissions_dir / "ai.txt"
+		
+		if not ai_file.exists():
+			messagebox.showwarning("File Not Found", f"ai.txt not found in:\n{self.submissions_dir}")
+			return
+		
+		try:
+			content = ai_file.read_text(encoding="utf-8")
+		except Exception as e:
+			messagebox.showerror("Error", f"Failed to read ai.txt:\n{e}")
+			return
+		
+		viewer = tk.Toplevel(self.root)
+		viewer.title("ai.txt")
+		
+		base_width = 600
+		base_height = 400
+		zoomed_width = int(base_width * self.zoom_level)
+		zoomed_height = int(base_height * self.zoom_level)
+		self._center_window_on_parent(viewer, zoomed_width, zoomed_height)
+		
+		text_frame = ttk.Frame(viewer)
+		text_frame.pack(fill="both", expand=True, padx=10, pady=10)
+		
+		base_font_size = 10
+		zoomed_font_size = int(base_font_size * self.zoom_level)
+		
+		text_widget = ScrolledText(text_frame, wrap="word", font=("Consolas", zoomed_font_size))
+		text_widget.pack(fill="both", expand=True)
+		
+		text_widget.insert("1.0", content)
+		text_widget.config(state="disabled")  
+
 	def _create_collapsible_csv_viewer(self, parent: ttk.Frame, file_path: Path, idx: int, colors: list, base_file_path: Path = None, viewer_window = None) -> tk.Text | None:
 		file_frame = ttk.LabelFrame(parent, text=file_path.name, padding=5)
 		file_frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -2273,7 +2418,7 @@ class PythonTesterApp:
 		self.points_display.configure(font=("TkDefaultFont", points_font_size, "bold"))
 		self.grade_display.configure(font=("TkDefaultFont", points_font_size, "bold"))
 		
-		label_font = ("TkDefaultFont", int(8 * self.zoom_level))
+		label_font = ("TkDefaultFont", int(9 * self.zoom_level))
 		self.directory_label.configure(font=label_font)
 		
 		button_font = ("TkDefaultFont", new_font_size)
@@ -2282,6 +2427,7 @@ class PythonTesterApp:
 		self.clear_button.configure(font=button_font)
 		self.open_code_button.configure(font=button_font)
 		self.open_files_button.configure(font=button_font)
+		self.open_ai_button.configure(font=button_font)
 		
 		menu_font = ("Segoe UI", new_font_size)
 		try:
@@ -2302,6 +2448,7 @@ class PythonTesterApp:
 						loaded_dir = Path(config["submissions_dir"])
 						if loaded_dir.exists():
 							self.submissions_dir = loaded_dir
+							self.root.after(100, self._load_feedback_from_directory)
 					if "last_opened_file" in config:
 						self.last_opened_file = config["last_opened_file"]
 					if "current_points" in config:
@@ -2328,7 +2475,6 @@ class PythonTesterApp:
 		if hasattr(self, 'last_opened_file'):
 			config["last_opened_file"] = self.last_opened_file
 		CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
-
 
 def initialize_bundled_resources():
 	if not getattr(sys, 'frozen', False):
