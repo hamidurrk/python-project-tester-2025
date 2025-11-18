@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import difflib
 import tkinter as tk
 import zipfile
 from pathlib import Path
@@ -2262,12 +2263,33 @@ class PythonTesterApp:
 		num_lines = len(lines)
 		
 		base_lines = []
+		diff_info = []
+		deleted_lines = []  
+		modified_lines = []  
 		if base_file_path and base_file_path.exists():
 			try:
 				base_content = base_file_path.read_text(encoding="utf-8")
 				base_lines = base_content.strip().split('\n')
+				
+				matcher = difflib.SequenceMatcher(None, base_lines, lines)
+				
+				for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+					if tag == 'replace':
+						for idx, j in enumerate(range(j1, j2)):
+							diff_info.append((j, 'modified'))
+							if i1 + idx < len(base_lines):
+								modified_lines.append((j + 1, base_lines[i1 + idx]))  
+					elif tag == 'insert':
+						for j in range(j1, j2):
+							diff_info.append((j, 'added'))
+					elif tag == 'delete':
+						for i in range(i1, i2):
+							deleted_lines.append((i + 1, base_lines[i])) 
+				
 			except Exception:
 				pass
+		
+		diff_map = {line_idx: status for line_idx, status in diff_info}
 		
 		initial_font_size = int(11 * self.files_viewer_zoom)
 		
@@ -2280,9 +2302,9 @@ class PythonTesterApp:
 							  pady=10)
 		text_widget.pack(fill="both", expand=False, padx=5, pady=5)
 		
-		text_widget.tag_config("extra_line", background="#FFFF99")  # Yellow - new lines at end
-		text_widget.tag_config("modified_line", background="#FFD4A3")  # Light orange - modified content
-		text_widget.tag_config("current_extra_line", background="#FFA500")  # Orange - currently selected
+		text_widget.tag_config("extra_line", background="#FFFF99")  
+		text_widget.tag_config("modified_line", background="#FFD4A3")  
+		text_widget.tag_config("current_extra_line", background="#FFA500")  
 		
 		if lines:
 			first_line = lines[0]
@@ -2294,12 +2316,7 @@ class PythonTesterApp:
 			for line_idx, line in enumerate(lines):
 				line_num = line_idx + 1
 				
-				is_extra = line_idx >= len(base_lines)
-				is_modified = False
-				
-				if not is_extra and line_idx < len(base_lines):
-					if line.strip() != base_lines[line_idx].strip():
-						is_modified = True
+				status = diff_map.get(line_idx)
 				
 				columns = line.split(delimiter)
 				for col_idx, column in enumerate(columns):
@@ -2309,16 +2326,72 @@ class PythonTesterApp:
 						text_widget.insert("end", delimiter)
 				text_widget.insert("end", "\n")
 				
-				if is_extra:
+				if status == 'added':
 					text_widget.tag_add("extra_line", f"{line_num}.0", f"{line_num}.end")
 					if viewer_window:
 						viewer_window.extra_line_positions.append((text_widget, line_num))
-				elif is_modified:
+				elif status == 'modified':
 					text_widget.tag_add("modified_line", f"{line_num}.0", f"{line_num}.end")
 					if viewer_window:
 						viewer_window.extra_line_positions.append((text_widget, line_num))
 		
 		text_widget.config(height=num_lines, state="disabled")
+		
+		if deleted_lines:
+			deleted_frame = ttk.Frame(content_frame)
+			deleted_frame.pack(fill="x", padx=5, pady=(10, 5))
+			
+			deleted_label = ttk.Label(deleted_frame, text="🗑 Deleted Lines:", 
+									 foreground="#CC0000", font=("Consolas", initial_font_size, "bold"))
+			deleted_label.pack(anchor="w")
+			
+			deleted_text = tk.Text(deleted_frame, wrap="none",
+								  font=("Consolas", initial_font_size),
+								  bg="#FFE6E6",  
+								  borderwidth=2,
+								  relief="solid",
+								  padx=10,
+								  pady=5,
+								  height=min(len(deleted_lines), 5))  
+			deleted_text.pack(fill="x", pady=(5, 0))
+			
+			if len(deleted_lines) > 5:
+				deleted_scrollbar = ttk.Scrollbar(deleted_frame, orient="vertical", command=deleted_text.yview)
+				deleted_text.config(yscrollcommand=deleted_scrollbar.set)
+			
+			for line_num, line_content in deleted_lines:
+				deleted_text.insert("end", f"Line {line_num}: {line_content}\n", "deleted")
+			
+			deleted_text.tag_config("deleted", foreground="#CC0000")
+			deleted_text.config(state="disabled")
+		
+		if modified_lines:
+			modified_frame = ttk.Frame(content_frame)
+			modified_frame.pack(fill="x", padx=5, pady=(10, 5))
+			
+			modified_label = ttk.Label(modified_frame, text="📝 Original Content (Modified Lines):", 
+									   foreground="#0066CC", font=("Consolas", initial_font_size, "bold"))
+			modified_label.pack(anchor="w")
+			
+			modified_text = tk.Text(modified_frame, wrap="none",
+								   font=("Consolas", initial_font_size),
+								   bg="#E6F2FF",  
+								   borderwidth=2,
+								   relief="solid",
+								   padx=10,
+								   pady=5,
+								   height=min(len(modified_lines), 5))  
+			modified_text.pack(fill="x", pady=(5, 0))
+			
+			if len(modified_lines) > 5:
+				modified_scrollbar = ttk.Scrollbar(modified_frame, orient="vertical", command=modified_text.yview)
+				modified_text.config(yscrollcommand=modified_scrollbar.set)
+			
+			for line_num, original_content in modified_lines:
+				modified_text.insert("end", f"Line {line_num} (original): {original_content}\n", "modified")
+			
+			modified_text.tag_config("modified", foreground="#0066CC")
+			modified_text.config(state="disabled")
 		
 		def toggle_collapse():
 			if is_collapsed.get():
