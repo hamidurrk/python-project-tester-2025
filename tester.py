@@ -2210,11 +2210,22 @@ class PythonTesterApp:
 			messagebox.showwarning("File Not Found", f"ai.txt not found in:\n{self.submissions_dir}")
 			return
 		
-		try:
-			content = ai_file.read_text(encoding="utf-8")
-		except Exception as e:
-			messagebox.showerror("Error", f"Failed to read ai.txt:\n{e}")
-			return
+		content = None
+		encodings_to_try = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+		
+		for encoding in encodings_to_try:
+			try:
+				content = ai_file.read_text(encoding=encoding)
+				break
+			except (UnicodeDecodeError, LookupError):
+				continue
+		
+		if content is None:
+			try:
+				content = ai_file.read_text(encoding="utf-8", errors="replace")
+			except Exception as e:
+				messagebox.showerror("Error", f"Failed to read ai.txt:\n{e}")
+				return
 		
 		viewer = tk.Toplevel(self.root)
 		viewer.title("ai.txt")
