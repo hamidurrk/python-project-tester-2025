@@ -643,17 +643,20 @@ class PythonTesterApp:
 			
 			env = os.environ.copy()
 			env['PYTHONUNBUFFERED'] = '1'
+			env['PYTHONIOENCODING'] = 'utf-8' 
 			
 			self.process = subprocess.Popen(
-				[python_executable, '-u', str(script_path)],  
+				[python_executable, '-u', str(script_path)],
 				cwd=str(script_path.parent),
 				stdin=subprocess.PIPE,
 				stdout=subprocess.PIPE,
 				stderr=subprocess.STDOUT,
 				text=True,
-				bufsize=0,  
+				bufsize=0,
 				creationflags=creation_flags,
 				env=env,
+				encoding='utf-8', 
+				errors='replace'   # Replace unencodable characters with �
 			)
 		except OSError as err:
 			messagebox.showerror("Execution Error", f"Failed to start process: {err}")
