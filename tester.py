@@ -120,10 +120,7 @@ class PythonTesterApp:
 		
 		self.root.minsize(1220, 600)
 		
-		if sys.platform == 'darwin':
-			self.root.attributes('-zoomed', True)
-		else:  # Windows and Linux
-			self.root.state('zoomed')
+		self.root.state('zoomed')
 		
 		if ICON_PATH.exists():
 			try:
