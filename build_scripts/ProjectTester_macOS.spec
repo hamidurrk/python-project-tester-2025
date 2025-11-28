@@ -78,8 +78,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'Project Tester',
         'CFBundleDisplayName': 'Project Tester',
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '1.0.0',
+        'CFBundleShortVersionString': '1.0.3',
+        'CFBundleVersion': '1.0.3',
         'CFBundlePackageType': 'APPL',
         'CFBundleSignature': '????',
         'CFBundleExecutable': 'ProjectTester',
