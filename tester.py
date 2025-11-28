@@ -120,7 +120,10 @@ class PythonTesterApp:
 		
 		self.root.minsize(1220, 600)
 		
-		self.root.state('zoomed')
+		if sys.platform == 'darwin':
+			self.root.attributes('-zoomed', True)
+		else:  # Windows and Linux
+			self.root.state('zoomed')
 		
 		if ICON_PATH.exists():
 			try:
@@ -236,8 +239,10 @@ class PythonTesterApp:
 		
 		# ttk.Label(header_row, text="Submission File").grid(row=0, column=0, sticky="w")
 		
-		self.directory_label = ttk.Label(header_row, text="Directory: None", foreground="gray")
+		self.directory_label = ttk.Label(header_row, text="Directory: None", foreground="gray", cursor="hand2")
 		self.directory_label.grid(row=0, column=0, sticky="w")
+		self.directory_label.bind("<Button-1>", lambda e: self._open_current_directory())
+		ToolTip(self.directory_label, "Click to open directory")
 		
 		browse_button = ttk.Button(header_row, text="📁 Browse", command=self._browse_directory)
 		browse_button.grid(row=0, column=1, sticky="w", padx=(6, 0))
@@ -534,7 +539,7 @@ class PythonTesterApp:
 		if self.submissions_dir is None:
 			self.directory_label.config(text="Directory: None", foreground="gray")
 		else:
-			self.directory_label.config(text=f"Directory: {self.submissions_dir}", foreground="black")
+			self.directory_label.config(text=f"Directory: {self.submissions_dir}", foreground="blue", cursor="hand2")
 		self._update_button_states()
 	
 	def _update_button_states(self) -> None:
@@ -654,7 +659,7 @@ class PythonTesterApp:
 			
 			env = os.environ.copy()
 			env['PYTHONUNBUFFERED'] = '1'
-			env['PYTHONIOENCODING'] = 'utf-8' 
+			env['PYTHONIOENCODING'] = 'utf-8'
 			
 			self.process = subprocess.Popen(
 				[python_executable, '-u', str(script_path)],
@@ -1165,6 +1170,7 @@ class PythonTesterApp:
 		
 		self.feedback_text.delete("1.0", tk.END)
 		self.feedback_text.insert("1.0", template_content)
+		return template_content
 	
 	def _save_feedback(self, show_message: bool = True) -> None:
 		if not self.feedback_text:
@@ -1213,8 +1219,8 @@ class PythonTesterApp:
 				self.last_saved_feedback_content = ""
 				self._start_feedback_auto_check()
 		else:
-			self._load_feedback_template()
-			self.last_saved_feedback_content = ""
+			content = self._load_feedback_template()
+			self.last_saved_feedback_content = content
 			self._update_feedback_status("", "gray")
 			self._start_feedback_auto_check()
 	
@@ -1267,7 +1273,8 @@ class PythonTesterApp:
 				if self.submissions_dir and (self.submissions_dir / "FEEDBACK.txt").exists():
 					self._update_feedback_status("Not saved", "red")
 				else:
-					self._update_feedback_status("Feedback has not been saved", "red")
+					if self.submissions_dir is not None:
+						self._update_feedback_status("Feedback has not been saved", "red")
 			else:
 				if self.submissions_dir and (self.submissions_dir / "FEEDBACK.txt").exists():
 					self._update_feedback_status("Auto-saved", "gray")
