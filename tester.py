@@ -155,6 +155,9 @@ class PythonTesterApp:
 		self.points_history: list[tuple[int, str]] = []  
 		self.last_accessed_preset_index: int = -1
 		self.last_sent_preset_index: int = -1  
+		self.feedback_status_label = None
+		self.feedback_auto_check_job = None
+		self.last_saved_feedback_content = ""
 
 		self._load_config()
 		self._create_menu()
@@ -255,7 +258,6 @@ class PythonTesterApp:
 
 		refresh_button = ttk.Button(file_row, text="⟳", command=self._refresh_file_list, width=3)
 		refresh_button.grid(row=0, column=0, sticky="w", padx=(0, 6))
-
 
 		reset_files_button = ttk.Button(file_row, text="Reset Project Files", command=self._reset_files, width=20)
 		reset_files_button.grid(row=0, column=3, sticky="e")
@@ -448,10 +450,13 @@ class PythonTesterApp:
 		
 		feedback_header = ttk.Frame(feedback_frame)
 		feedback_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-		feedback_header.columnconfigure(0, weight=1)
+		feedback_header.columnconfigure(1, weight=1)
 		
 		self.feedback_collapse_button = ttk.Button(feedback_header, text="▶ Show", width=12, command=self._toggle_feedback_collapse)
 		self.feedback_collapse_button.grid(row=0, column=0, sticky="w")
+		
+		self.feedback_status_label = tk.Label(feedback_header, text="", fg="gray", font=("TkDefaultFont", 8))
+		self.feedback_status_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
 		
 		self.feedback_content_frame = ttk.Frame(feedback_frame)
 		self.feedback_content_frame.grid(row=1, column=0, sticky="ew")
@@ -463,21 +468,27 @@ class PythonTesterApp:
 		
 		feedback_buttons_frame = ttk.Frame(self.feedback_content_frame)
 		feedback_buttons_frame.grid(row=1, column=0, sticky="ew")
-		feedback_buttons_frame.columnconfigure(0, weight=1)
+		feedback_buttons_frame.columnconfigure(1, weight=1)
 		
 		reset_feedback_button = ttk.Button(feedback_buttons_frame, text="Reset", command=self._reset_feedback)
 		reset_feedback_button.grid(row=0, column=0, sticky="w", padx=(0, 6))
 		
-		save_feedback_button = ttk.Button(feedback_buttons_frame, text="Save", command=self._save_feedback)
-		save_feedback_button.grid(row=0, column=1, sticky="e", padx=(16, 6))
+		refresh_feedback_button = ttk.Button(feedback_buttons_frame, text="⟳", width=3, command=self._refresh_feedback)
+		refresh_feedback_button.grid(row=0, column=1, sticky="w", padx=(0, 6))
+		ToolTip(refresh_feedback_button, "Refresh from file")
 		
 		if self.copy_icon:
 			copy_feedback_button = tk.Button(feedback_buttons_frame, image=self.copy_icon, command=self._copy_feedback,
 											 relief="flat", cursor="hand2", bd=0, bg=self.root.cget('bg'))
 		else:
 			copy_feedback_button = ttk.Button(feedback_buttons_frame, text="📋", width=3, command=self._copy_feedback)
-		copy_feedback_button.grid(row=0, column=0, sticky="e")
+		copy_feedback_button.grid(row=0, column=2, sticky="e")
 		ToolTip(copy_feedback_button, "Copy")
+		
+		save_feedback_button = ttk.Button(feedback_buttons_frame, text="Save", command=self._save_feedback)
+		save_feedback_button.grid(row=0, column=3, sticky="e", padx=(16, 6))
+		
+		self.feedback_text.bind("<<Modified>>", self._on_feedback_modified)
 		
 		self._load_feedback_template()
 
@@ -1155,12 +1166,13 @@ class PythonTesterApp:
 		self.feedback_text.delete("1.0", tk.END)
 		self.feedback_text.insert("1.0", template_content)
 	
-	def _save_feedback(self) -> None:
+	def _save_feedback(self, show_message: bool = True) -> None:
 		if not self.feedback_text:
 			return
 		
 		if self.submissions_dir is None or not self.submissions_dir.exists():
-			messagebox.showwarning("No Directory", "Please select a directory first.")
+			if show_message:
+				messagebox.showwarning("No Directory", "Please select a directory first.")
 			return
 		
 		feedback_file = self.submissions_dir / "FEEDBACK.txt"
@@ -1168,9 +1180,13 @@ class PythonTesterApp:
 		
 		try:
 			feedback_file.write_text(feedback_content, encoding="utf-8")
-			messagebox.showinfo("Feedback Saved", f"Feedback saved to:\n{feedback_file}")
+			self.last_saved_feedback_content = feedback_content
+			self._update_feedback_status("Auto-saved", "gray")
+			if show_message:
+				messagebox.showinfo("Feedback Saved", f"Feedback saved to:\n{feedback_file}")
 		except Exception as e:
-			messagebox.showerror("Save Error", f"Failed to save feedback: {e}")
+			if show_message:
+				messagebox.showerror("Save Error", f"Failed to save feedback: {e}")
 	
 	def _load_feedback_from_directory(self) -> None:
 		if not self.feedback_text:
@@ -1178,6 +1194,7 @@ class PythonTesterApp:
 		
 		if self.submissions_dir is None or not self.submissions_dir.exists():
 			self._load_feedback_template()
+			self._stop_feedback_auto_check()
 			return
 		
 		feedback_file = self.submissions_dir / "FEEDBACK.txt"
@@ -1187,21 +1204,114 @@ class PythonTesterApp:
 				feedback_content = feedback_file.read_text(encoding="utf-8")
 				self.feedback_text.delete("1.0", tk.END)
 				self.feedback_text.insert("1.0", feedback_content)
+				self.last_saved_feedback_content = feedback_content
+				self._update_feedback_status("Auto-saved", "gray")
+				self._start_feedback_auto_check()
 			except Exception as e:
 				print(f"Failed to load feedback from directory: {e}")
 				self._load_feedback_template()
+				self.last_saved_feedback_content = ""
+				self._start_feedback_auto_check()
 		else:
 			self._load_feedback_template()
+			self.last_saved_feedback_content = ""
+			self._update_feedback_status("", "gray")
+			self._start_feedback_auto_check()
 	
 	def _reset_feedback(self) -> None:
 		self._load_feedback_template()
-		if self.submissions_dir and self.submissions_dir.exists() and self.feedback_text:
-			feedback_file = self.submissions_dir / "FEEDBACK.txt"
-			feedback_content = self.feedback_text.get("1.0", "end-1c")
-			try:
-				feedback_file.write_text(feedback_content, encoding="utf-8")
-			except Exception as e:
-				print(f"Failed to auto-save feedback after reset: {e}")
+		self._save_feedback(show_message=False)
+		if self.submissions_dir and (self.submissions_dir / "FEEDBACK.txt").exists():
+			self._start_feedback_auto_check()
+	
+	def _refresh_feedback(self) -> None:
+		if not self.feedback_text:
+			return
+		
+		if self.submissions_dir is None or not self.submissions_dir.exists():
+			messagebox.showwarning("No Directory", "Please select a directory first.")
+			return
+		
+		feedback_file = self.submissions_dir / "FEEDBACK.txt"
+		
+		if not feedback_file.exists():
+			messagebox.showinfo("No File", "No FEEDBACK.txt file found in the directory.")
+			return
+		
+		try:
+			file_content = feedback_file.read_text(encoding="utf-8")
+			current_content = self.feedback_text.get("1.0", "end-1c")
+			
+			if file_content != current_content:
+				response = messagebox.askyesno(
+					"Content Differs",
+					"The content in the textbox differs from the file.\nDo you want to load from file? (Current changes will be lost)"
+				)
+				if response:
+					self.feedback_text.delete("1.0", tk.END)
+					self.feedback_text.insert("1.0", file_content)
+					self.last_saved_feedback_content = file_content
+					self._update_feedback_status("Auto-saved", "gray")
+			else:
+				messagebox.showinfo("No Changes", "The content matches the file. No refresh needed.")
+		except Exception as e:
+			messagebox.showerror("Load Error", f"Failed to load feedback: {e}")
+	
+	def _on_feedback_modified(self, event=None) -> None:
+		if not self.feedback_text:
+			return
+		
+		if self.feedback_text.edit_modified():
+			current_content = self.feedback_text.get("1.0", "end-1c")
+			if current_content != self.last_saved_feedback_content:
+				if self.submissions_dir and (self.submissions_dir / "FEEDBACK.txt").exists():
+					self._update_feedback_status("Not saved", "red")
+				else:
+					self._update_feedback_status("Feedback has not been saved", "red")
+			else:
+				if self.submissions_dir and (self.submissions_dir / "FEEDBACK.txt").exists():
+					self._update_feedback_status("Auto-saved", "gray")
+				else:
+					self._update_feedback_status("", "gray")
+			self.feedback_text.edit_modified(False)
+	
+	def _update_feedback_status(self, text: str, color: str) -> None:
+		if self.feedback_status_label:
+			self.feedback_status_label.config(text=text, fg=color)
+	
+	def _start_feedback_auto_check(self) -> None:
+		self._stop_feedback_auto_check()
+		self._schedule_feedback_check()
+	
+	def _stop_feedback_auto_check(self) -> None:
+		if self.feedback_auto_check_job:
+			self.root.after_cancel(self.feedback_auto_check_job)
+			self.feedback_auto_check_job = None
+			self._update_feedback_status("", "gray")
+	
+	def _schedule_feedback_check(self) -> None:
+		self._check_and_auto_save_feedback()
+		self.feedback_auto_check_job = self.root.after(5000, self._schedule_feedback_check)
+	
+	def _check_and_auto_save_feedback(self) -> None:
+		if not self.feedback_text or self.submissions_dir is None or not self.submissions_dir.exists():
+			return
+		
+		feedback_file = self.submissions_dir / "FEEDBACK.txt"
+		file_exists = feedback_file.exists()
+		
+		try:
+			current_content = self.feedback_text.get("1.0", "end-1c")
+			
+			if current_content != self.last_saved_feedback_content:
+				self._save_feedback(show_message=False)
+			else:
+				if file_exists:
+					self._update_feedback_status("Auto-saved", "gray")
+				else:
+					self._update_feedback_status("", "gray")
+		except Exception as e:
+			print(f"Failed to auto-check feedback: {e}")
 	
 	def _toggle_feedback_collapse(self) -> None:
 		if self.feedback_collapsed:
@@ -2507,6 +2617,7 @@ class PythonTesterApp:
 		
 		label_font = ("TkDefaultFont", int(9 * self.zoom_level))
 		self.directory_label.configure(font=label_font)
+		self.feedback_status_label.configure(font=label_font)
 		
 		button_font = ("TkDefaultFont", new_font_size)
 		self.run_button.configure(font=button_font)
