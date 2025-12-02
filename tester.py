@@ -1484,17 +1484,23 @@ class PythonTesterApp:
 						max_count = max(max_count, count_num)
 						existing_names.add(name)
 			
-			pattern = r"Submit your project work \(Closes at \d{4}-\d{2}-\d{2} \d{2}_\d{2}\)-(.+)-archive\.zip"
+			# Patterns for both submit and re-submit
+			patterns = [
+				r"Submit your project work \(Closes at \d{4}-\d{2}-\d{2} \d{2}_\d{2}\)-(.+)-archive\.zip",
+				r"Re-submit your project work \(Closes at \d{4}-\d{2}-\d{2} \d{2}_\d{2}\)-(.+)-archive\.zip"
+			]
 			
 			zip_files = list(source_path.glob("*.zip"))
 			matched_files = []
 			
 			for zip_file in zip_files:
-				match = re.match(pattern, zip_file.name)
-				if match:
-					name = match.group(1)
-					if name not in existing_names:
-						matched_files.append((zip_file, name))
+				for pattern in patterns:
+					match = re.match(pattern, zip_file.name)
+					if match:
+						name = match.group(1)
+						if name not in existing_names:
+							matched_files.append((zip_file, name))
+						break 
 			
 			if not matched_files:
 				messagebox.showinfo("No New Files", "No new submissions found to extract.\nAll students already exist in the destination directory.")
